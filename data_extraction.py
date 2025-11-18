@@ -32,6 +32,8 @@ def get_dictionary(nbr_images, path_occurences, path_multimedia):
         how='left'
     )
     return merged
+#"individualCount", "coordinateUncertaintyInMeters", "coordinatePrecision", "taxonID", "scientificNameID" , "acceptedNameUsageID" , "parentNameUsageID", "originalNameUsageID", "scientificName"
+#class	order	superfamily	family	subfamily	tribe	subtribe	genus	genericName	subgenus
 
 def download_imgs(dictionary, output_dir="downloaded_images/all_images"):
     '''Mid the name under which images are registered: 

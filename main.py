@@ -50,7 +50,7 @@ print("download finished")
 
 
 
-dataloader, _=utils.dataloader_emb(data_path,batch_size=batch_size)
+dataloader, _ =utils.dataloader_emb(data_path,batch_size=batch_size)
 #hyperparameters:
 #pos. layer sizes
 #we first upscale from 2 to dim_fourrier_encoding, with the fourrier encodding

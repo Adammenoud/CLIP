@@ -11,6 +11,7 @@ from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import os
 import json
+from pyproj import Transformer
 
 
 def noise(input, std):
@@ -291,3 +292,15 @@ def plot(data, title,bins=50):
     plt.ylabel('Frequency')
     plt.title(title)
     plt.savefig(title)
+
+
+def CH_to_coord(east, north): 
+    '''Mind the order! It swaps to respect both order conventions
+    ETH doc: https://ia.arch.ethz.ch/lat-lon-to-ch-coordinates/'''
+    transformer_CH_to_WGS = Transformer.from_crs(
+    "EPSG:21781",  # CH1903 / LV03
+    "EPSG:4326",   # WGS84
+    always_xy=True
+    )
+    lons, lats = transformer_CH_to_WGS.transform(east, north)
+    return lats,lons
