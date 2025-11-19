@@ -293,14 +293,14 @@ def plot(data, title,bins=50):
     plt.title(title)
     plt.savefig(title)
 
+def coord_trans(x, y, order="CH_to_normal"):
 
-def CH_to_coord(east, north): 
-    '''Mind the order! It swaps to respect both order conventions
-    ETH doc: https://ia.arch.ethz.ch/lat-lon-to-ch-coordinates/'''
-    transformer_CH_to_WGS = Transformer.from_crs(
-    "EPSG:21781",  # CH1903 / LV03
-    "EPSG:4326",   # WGS84
-    always_xy=True
-    )
-    lons, lats = transformer_CH_to_WGS.transform(east, north)
-    return lats,lons
+    if order == "CH_to_normal":
+        transformer = Transformer.from_crs("EPSG:21781", "EPSG:4326", always_xy=True)
+        x_out, y_out = transformer.transform(x, y)  # X=Easting, Y=Northing
+    elif order == "normal_to_CH":
+        transformer = Transformer.from_crs("EPSG:4326", "EPSG:21781", always_xy=True)
+        x_out, y_out = transformer.transform(x, y)  # X=Longitude, Y=Latitude
+    else:
+        raise ValueError("order must be either 'CH_to_normal' or 'normal_to_CH'")
+    return x_out, y_out
