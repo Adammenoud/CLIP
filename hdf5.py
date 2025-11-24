@@ -30,17 +30,26 @@ def open_HDF5(filename):
     file = h5py.File(filename, 'r+')
     return file
 
-def append_HDF5(vectors_to_add, label_to_add,file, data_name="vectors",label_name="coordinates"):
-    '''vectors to add: the dimension [1] must match the "vector length" of the file; likewise for labels'''
-    # Resize dataset to accommodate new vectors
-    vectors=file[data_name]
-    coordinates=file[label_name]
-
+def append_HDF5(vectors_to_add, label_to_add, file, data_name="vectors", label_name="coordinates", dict_idx=None):
+    # Resize and append vectors
+    vectors = file[data_name]
     vectors.resize(vectors.shape[0] + vectors_to_add.shape[0], axis=0)
-    vectors[-(vectors_to_add.shape[0]):] = vectors_to_add # append vectors
+    vectors[-vectors_to_add.shape[0]:] = vectors_to_add
 
+    # Resize and append coordinates/labels
+    coordinates = file[label_name]
     coordinates.resize(coordinates.shape[0] + label_to_add.shape[0], axis=0)
-    coordinates[-(label_to_add.shape[0]):] = label_to_add # append coordinates
+    coordinates[-label_to_add.shape[0]:] = label_to_add
+
+    if dict_idx is not None:
+        if "dict_idx" not in file:
+            maxshape = (None,)
+            file.create_dataset("dict_idx", data=dict_idx, maxshape=maxshape, dtype="int64")
+        else:
+            idx_ds = file["dict_idx"]
+            idx_ds.resize(idx_ds.shape[0] + len(dict_idx), axis=0)
+            idx_ds[-len(dict_idx):] = dict_idx
+
 
 
 def get_size(path):

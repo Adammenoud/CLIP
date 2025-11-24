@@ -192,7 +192,7 @@ def train(doublenetwork,
     #### training loop
     for ep in range(epochs):
         pbar = tqdm(dataloader)
-        for i, (images, labels) in enumerate(pbar):
+        for i, (images, labels,_) in enumerate(pbar):
             images = images.to(device)
             labels = labels.to(device)
             logits=doublenetwork(images,labels) #logits of cosine similarities
@@ -228,7 +228,7 @@ def train(doublenetwork,
         if test_dataloader is not None and ep % test_frequency ==0:
             doublenetwork.eval()
             with torch.no_grad():
-                test_images, test_labels = next(iter(test_dataloader))
+                test_images, test_labels, _ = next(iter(test_dataloader))
                 test_images = test_images.to(device)
                 test_labels = test_labels.to(device)
 
@@ -288,7 +288,7 @@ def test_similarity(data_file_name,doublenetwork, nbr_samples=2,device="cuda",nb
             # reinitialize iterator if dataset is smaller than nbr_iter
             data_iter = iter(dataloader)
             batch = next(data_iter)
-        emb_vectors, coord = batch
+        emb_vectors, coord , _ = batch
         emb_vectors = emb_vectors.to(device)
         coord = coord.to(device)
         logits=doublenetwork(emb_vectors,coord)

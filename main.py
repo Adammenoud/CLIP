@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 import math
 from torch.utils.tensorboard import SummaryWriter
+import pandas as pd
 
 #local:
 import utils
@@ -21,18 +22,20 @@ import hdf5
 np.random.seed(48)
 torch.manual_seed(48)
 #--------------------------------------------------------------------------------------
-nbr_epochs=2
+nbr_epochs=5
 device="cuda"
-batch_size=4096
+batch_size=1024#4096 previoulsy #"We use batch size |B| as 512 when training on full dataset. For data-efficient settings with 20%, 10%, and 5% of the data, we use |B| as 256, 256, and 128 respectively"
 save_name="to_delete_test_checkpoints"
-data_path="/home/adam/source/CLIP/full_dataset_embeddings.h5"
+data_path="/home/adam/source/CLIP/downloaded_embeddings.h5"
 #Fetching data
-
+'''
 print("making dictionary")
 path_multimedia="/home/adam/source/CLIP/data_plantnet_obsevations/multimedia.txt"
 path_occurences="/home/adam/source/CLIP/data_plantnet_obsevations/occurrence.txt"
-dictionary=data_extraction.get_dictionary(3167066, path_occurences, path_multimedia,extra_occ_columns=['scientificName'])#3167066 rows
+dictionary=data_extraction.get_dictionary(3000, path_occurences, path_multimedia,extra_occ_columns=['scientificName'])#3167066 rows
 dictionary.to_csv("data_dictionary")
+'''
+dictionary=pd.read_csv("data_dictionary")
 
 '''
 print("downloading embeddings")
@@ -54,7 +57,7 @@ dataloader, test_dataloader =utils.dataloader_emb(data_path,batch_size=batch_siz
 #hyperparameters:
 #pos. layer sizes
 #we first upscale from 2 to dim_fourrier_encoding, with the fourrier encodding
-dim_fourier_encoding=64 #multiple of 4!!
+dim_fourier_encoding=64 #multiple of 4!! 512 in geoCLIP, followed by "two trainable linear layers h1 and h2 having dimensions of 768 and 512 respectively"
 dim_hidden=256
 dim_emb=128 #this one is actually shared with img embeddings
 

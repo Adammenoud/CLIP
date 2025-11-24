@@ -9,7 +9,7 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import torch
 from torch.utils.data import Dataset, DataLoader
-
+import open_clip
 
 
 #data available at https://api.gbif.org/v1/occurrence/download/request/0015029-251025141854904.zip
@@ -108,12 +108,13 @@ def process_row(row, processor, model, device):
             return None
 
         image = Image.open(response.raw).convert("RGB")
-        inputs = processor(images=image, return_tensors="pt")
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-
+        # inputs = processor(images=image, return_tensors="pt" for DINOv2
+        #inputs = {k: v.to(device) for k, v in inputs.items()} for DINOv2
+        image_tensor = processor(image).unsqueeze(0).to(device) 
         with torch.no_grad():
-            outputs = model(**inputs) #
-        cls_embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+            #outputs = model(**inputs)  #for DINO-V2 (normal forward method)
+            outputs = model.encode_image(image_tensor) #for bioCLIP (image encoder)
+        cls_embedding = outputs.cpu().numpy()
         coordinates = np.array([[row['decimalLatitude'], row['decimalLongitude']]])
         return cls_embedding, coordinates
     except Exception as e:
@@ -127,11 +128,13 @@ def download_emb(dictionary, dim_emb, output_dir="downloaded_embeddings", device
     file = hdf5.open_HDF5(output_dir + ".h5")
 
     # Load DINOv2 model
-    processor = AutoImageProcessor.from_pretrained('facebook/dinov2-base')
-    model = AutoModel.from_pretrained('facebook/dinov2-base').to(device)
-    model.eval()
+    #processor = AutoImageProcessor.from_pretrained('facebook/dinov2-base')
+    #model = AutoModel.from_pretrained('facebook/dinov2-base').to(device)
+    #model.eval()
 
-    #model, preprocess_train, preprocess_val = open_clip.create_model_and_transforms('hf-hub:imageomics/bioclip-2')
+    model, preprocess_train, processor = open_clip.create_model_and_transforms('hf-hub:imageomics/bioclip-2')
+    model = model.to(device)
+    model.eval()
     #tokenizer = open_clip.get_tokenizer('hf-hub:imageomics/bioclip-2')
     #to encode:
     #image_features = model.encode_image(image_tensor)
@@ -147,10 +150,11 @@ def download_emb(dictionary, dim_emb, output_dir="downloaded_embeddings", device
 
         for future in tqdm(as_completed(future_to_idx), total=dictionary.shape[0], desc="Downloading embeddings"):
             res = future.result()
+            idx = future_to_idx[future]  # original DataFrame index
             if res is not None:
                 cls_embedding, coordinates = res
                 hdf5.append_HDF5(vectors_to_add=cls_embedding, label_to_add=coordinates, file=file,
-                                 data_name="vectors", label_name="coordinates")
+                                 data_name="vectors", label_name="coordinates", dict_idx=[idx])
 
     file.close()
 
@@ -164,6 +168,7 @@ class HDF5Dataset(Dataset):
         # Open file once to read shape
         file=hdf5.open_HDF5(file_path)
         self.length = file[data_name].shape[0]
+        self.has_idx = "dict_idx" in file #compatibility
         file.close()
 
 
@@ -175,11 +180,16 @@ class HDF5Dataset(Dataset):
         file=hdf5.open_HDF5(self.file_path)
         data = file[self.dataset_name][idx]  # Load only one sample
         label=file[self.label_name][idx]
+        if self.has_idx:
+            dict_idx = file["dict_idx"][idx]
+        else:
+            dict_idx = -1  # fallback if dict_idx is missing (compatibbility with old hp5 files)
 
         data_return= torch.tensor(data, dtype=torch.float32)
         label_return=torch.tensor(label, dtype=torch.float32)
+        dict_idx_return= torch.tensor(dict_idx, dtype=torch.int64)
         file.close()
-        return (data_return, label_return)
+        return (data_return, label_return, dict_idx_return)
 
 
 
