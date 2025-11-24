@@ -11,9 +11,10 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 
+
 #data available at https://api.gbif.org/v1/occurrence/download/request/0015029-251025141854904.zip
 
-def get_dictionary(nbr_images, path_occurences, path_multimedia):
+def get_dictionary(nbr_images, path_occurences, path_multimedia, extra_occ_columns=None):
     # Load (takes about 3 min)
     occurrences = pd.read_csv(path_occurences, sep="\t", low_memory=False)
     multimedia = pd.read_csv(path_multimedia, sep="\t", low_memory=False)
@@ -25,9 +26,12 @@ def get_dictionary(nbr_images, path_occurences, path_multimedia):
     multimedia = multimedia[['gbifID', 'identifier']]
 
     # Merges with occurrences to get coordinates (can also add more covariates)
+    occ_cols = ['gbifID', 'decimalLatitude', 'decimalLongitude']
+    if extra_occ_columns:
+        occ_cols += extra_occ_columns
     merged = pd.merge(
         multimedia,
-        occurrences[['gbifID', 'decimalLatitude', 'decimalLongitude', ]],
+        occurrences[occ_cols],
         on='gbifID',
         how='left'
     )
@@ -108,7 +112,7 @@ def process_row(row, processor, model, device):
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
         with torch.no_grad():
-            outputs = model(**inputs)
+            outputs = model(**inputs) #
         cls_embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
         coordinates = np.array([[row['decimalLatitude'], row['decimalLongitude']]])
         return cls_embedding, coordinates
@@ -127,10 +131,18 @@ def download_emb(dictionary, dim_emb, output_dir="downloaded_embeddings", device
     model = AutoModel.from_pretrained('facebook/dinov2-base').to(device)
     model.eval()
 
+    #model, preprocess_train, preprocess_val = open_clip.create_model_and_transforms('hf-hub:imageomics/bioclip-2')
+    #tokenizer = open_clip.get_tokenizer('hf-hub:imageomics/bioclip-2')
+    #to encode:
+    #image_features = model.encode_image(image_tensor)
+    #text_features  = model.encode_text(text_tokens)
+
+
+
     # Parallel processing
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_idx = {executor.submit(process_row, row, processor, model, device): idx 
+        future_to_idx = {executor.submit(process_row, row, processor, model, device): idx  #syntax: .submit(function, arg1, arg2, ...). Basically, an ashychronous "for" loop on idx, row that tracks the output of process_row, and index it on idx
                          for idx, row in dictionary.iterrows()}
 
         for future in tqdm(as_completed(future_to_idx), total=dictionary.shape[0], desc="Downloading embeddings"):

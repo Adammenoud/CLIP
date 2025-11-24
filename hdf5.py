@@ -18,6 +18,13 @@ def create_HDF5_file(vector_length,name="hdf_file",data_name="vectors",label_nam
             chunks=True,
             dtype=label_type
         )
+        dset = f.create_dataset(
+            "dict_idx",
+            shape=(0,1),
+            maxshape=(None, 1),
+            chunks=True,
+            dtype='int'
+        )
 def open_HDF5(filename):
     '''MUST close with file.close()'''
     file = h5py.File(filename, 'r+')

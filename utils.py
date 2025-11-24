@@ -169,13 +169,27 @@ class Fourier_MLP(nn.Module): #fourrier encoding followed by 2 layer MLP
 
     
 
-def train(doublenetwork,epochs,dataloader,batch_size,lr=1e-4,device="cuda",save_name=None,saving_frequency=1):
+def train(doublenetwork,
+          epochs,
+          dataloader,
+          batch_size,
+          lr=1e-4,
+          device="cuda",
+          save_name=None,
+          saving_frequency=1,
+          nbr_checkppoints=None, 
+          test_dataloader=None,
+          test_frequency=1
+          ):
+    '''nbr_chepoints < epochs, please'''
+    #### initialization
     doublenetwork = doublenetwork.to(device)
     doublenetwork.train()
     writer =  SummaryWriter()
     optimizer=torch.optim.AdamW(doublenetwork.parameters(),lr=lr)
     l = len(dataloader)
-    
+    current_checkpoint=1
+    #### training loop
     for ep in range(epochs):
         pbar = tqdm(dataloader)
         for i, (images, labels) in enumerate(pbar):
@@ -190,20 +204,41 @@ def train(doublenetwork,epochs,dataloader,batch_size,lr=1e-4,device="cuda",save_
 
             pbar.set_postfix(CE=loss.item())
             writer.add_scalar("Cross-entropy", loss.item(), global_step=ep * l + i)
+    ################################# logs and savings
         if ep % saving_frequency == 0 and (save_name is not None):
-                os.makedirs(save_name, exist_ok=True)
-                torch.save(doublenetwork.state_dict(), os.path.join(save_name, f"model.pt")) #overwrites the same file, so to avoid getting floded by saves
-                torch.save(optimizer.state_dict(), os.path.join(save_name, f"optim.pt"))
-                hparams = {
+            os.makedirs(save_name, exist_ok=True)
+            torch.save(doublenetwork.state_dict(), os.path.join(save_name, f"model.pt")) #overwrites the same file, so to avoid getting floded by saves
+            torch.save(optimizer.state_dict(), os.path.join(save_name, f"optim.pt"))
+            hparams = {
                     "save_name" : save_name,
                     "saving_frequency" : saving_frequency,
                     "learning_rate": lr,
                     "batch_size": batch_size,
                     "epochs": epochs,
                     "current epoch (if stopped)" : ep}
-                config_path = os.path.join(save_name, "hyperparameters.json")
-                with open(config_path, "w") as f:
-                    json.dump(hparams, f, indent=4)
+            config_path = os.path.join(save_name, "hyperparameters.json")
+            with open(config_path, "w") as f:
+                json.dump(hparams, f, indent=4)
+        if save_name is not None and nbr_checkppoints is not None and ep % (epochs//nbr_checkppoints)==0 and ep!= 0:
+            checkpoint_name = f"{save_name}_checkpoint_{current_checkpoint}"
+            os.makedirs(checkpoint_name, exist_ok=True)
+            torch.save(doublenetwork.state_dict(), os.path.join(checkpoint_name, f"model.pt")) #overwrites the same file, so to avoid getting floded by saves
+            torch.save(optimizer.state_dict(), os.path.join(checkpoint_name, f"optim.pt"))
+            current_checkpoint +=1
+        if test_dataloader is not None and ep % test_frequency ==0:
+            doublenetwork.eval()
+            with torch.no_grad():
+                test_images, test_labels = next(iter(test_dataloader))
+                test_images = test_images.to(device)
+                test_labels = test_labels.to(device)
+
+                test_logits = doublenetwork(test_images, test_labels)
+                test_loss = CE_loss(test_logits, device=device)
+
+                writer.add_scalar("CE on test set", test_loss.item(), global_step=ep)
+            doublenetwork.train()
+    #######################
+
     doublenetwork.eval()
     writer.close()
     return doublenetwork

@@ -21,18 +21,20 @@ import hdf5
 np.random.seed(48)
 torch.manual_seed(48)
 #--------------------------------------------------------------------------------------
-nbr_epochs=300
+nbr_epochs=2
 device="cuda"
 batch_size=4096
-save_name="save_14_to_17-10-25"
+save_name="to_delete_test_checkpoints"
 data_path="/home/adam/source/CLIP/full_dataset_embeddings.h5"
 #Fetching data
-'''
+
 print("making dictionary")
 path_multimedia="/home/adam/source/CLIP/data_plantnet_obsevations/multimedia.txt"
 path_occurences="/home/adam/source/CLIP/data_plantnet_obsevations/occurrence.txt"
-dictionary=data_extraction.get_dictionary(3167066, path_occurences, path_multimedia)#TYPO, 317066 instead of 3167066
+dictionary=data_extraction.get_dictionary(3167066, path_occurences, path_multimedia,extra_occ_columns=['scientificName'])#3167066 rows
+dictionary.to_csv("data_dictionary")
 
+'''
 print("downloading embeddings")
 #make embeddings
 data_extraction.download_emb(dictionary, dim_emb=768, output_dir="downloaded_embeddings")
@@ -47,10 +49,8 @@ print("download finished")
 
 
 #TRAIN BABY
-
-
-
-dataloader, _ =utils.dataloader_emb(data_path,batch_size=batch_size)
+print("training")
+dataloader, test_dataloader =utils.dataloader_emb(data_path,batch_size=batch_size)
 #hyperparameters:
 #pos. layer sizes
 #we first upscale from 2 to dim_fourrier_encoding, with the fourrier encodding
@@ -67,5 +67,17 @@ pos_encoder=utils.Fourier_MLP(original_dim=2, fourier_dim=dim_fourier_encoding, 
 
 model= utils.DoubleNetwork(image_encoder,pos_encoder).to(device)
 
-model=utils.train(model, nbr_epochs, dataloader,batch_size,save_name=save_name).to(device)
-#tensorboard --logdir=Nov14_10-46-22_Chronos 
+model=utils.train(
+            model,
+            nbr_epochs,
+            dataloader,
+            batch_size,
+            lr=1e-4,
+            device="cuda",
+            save_name=save_name,
+            saving_frequency=1,
+            nbr_checkppoints=2, 
+            test_dataloader=test_dataloader,
+            test_frequency=1
+            )
+#tensorboard --logdir=runs
