@@ -5,6 +5,7 @@ import requests
 from transformers import AutoImageProcessor, AutoModel
 from PIL import Image
 import hdf5
+import h5py
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import torch
@@ -136,6 +137,7 @@ def download_emb(dictionary, dim_emb, output_dir="downloaded_embeddings", device
     model = model.to(device)
     model.eval()
     #tokenizer = open_clip.get_tokenizer('hf-hub:imageomics/bioclip-2')
+    
     #to encode:
     #image_features = model.encode_image(image_tensor)
     #text_features  = model.encode_text(text_tokens)
@@ -160,36 +162,33 @@ def download_emb(dictionary, dim_emb, output_dir="downloaded_embeddings", device
 
 
 class HDF5Dataset(Dataset):
-    def __init__(self, file_path, data_name="vectors",label_name="coordinates"):
+    def __init__(self, file_path, data_name="vectors", label_name="coordinates"):
         self.file_path = file_path
+        self.data_name = data_name
+        self.label_name = label_name
+        self.file = None  # file will be opened lazily per worker
 
-        self.dataset_name = data_name
-        self.label_name=label_name
-        # Open file once to read shape
-        file=hdf5.open_HDF5(file_path)
-        self.length = file[data_name].shape[0]
-        self.has_idx = "dict_idx" in file #compatibility
-        file.close()
-
+        # Open once just to get length
+        with h5py.File(file_path, "r") as f:
+            self.length = f[data_name].shape[0]
+            self.has_idx = "dict_idx" in f
 
     def __len__(self):
-        return self.length  #technically, only shows length of "vectors"
+        return self.length
 
     def __getitem__(self, idx):
-        # Open file *every time* to avoid multi-threading issues (only noticed a small difference in performance)
-        file=hdf5.open_HDF5(self.file_path)
-        data = file[self.dataset_name][idx]  # Load only one sample
-        label=file[self.label_name][idx]
-        if self.has_idx:
-            dict_idx = file["dict_idx"][idx]
-        else:
-            dict_idx = -1  # fallback if dict_idx is missing (compatibbility with old hp5 files)
+        # open file once per worker
+        if self.file is None:
+            self.file = h5py.File(self.file_path, "r")
 
-        data_return= torch.tensor(data, dtype=torch.float32)
-        label_return=torch.tensor(label, dtype=torch.float32)
-        dict_idx_return= torch.tensor(dict_idx, dtype=torch.int64)
-        file.close()
-        return (data_return, label_return, dict_idx_return)
+        data = self.file[self.data_name][idx]
+        label = self.file[self.label_name][idx]
+        dict_idx = self.file["dict_idx"][idx] if self.has_idx else -1
 
+        return (
+            torch.tensor(data, dtype=torch.float32),
+            torch.tensor(label, dtype=torch.float32),
+            torch.tensor(dict_idx, dtype=torch.int64)
+        )
 
 

@@ -12,6 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 import os
 import json
 from pyproj import Transformer
+import h5py
 
 
 def noise(input, std):
@@ -72,6 +73,7 @@ def dataloader_img(dictionary,image_folder_path,image_size,batch_size,shuffle=Tr
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
         return dataloader
 
+'''
 def dataloader_emb(file_path,batch_size,shuffle=False,train_proportion=0.8): #from a h5 file
     dataset=data_extraction.HDF5Dataset(file_path)
     train_size = int(train_proportion * len(dataset))
@@ -83,9 +85,10 @@ def dataloader_emb(file_path,batch_size,shuffle=False,train_proportion=0.8): #fr
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle)
     return train_loader, test_loader
+    '''
 
 def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=False, dictionary=None): #from a h5 file
-    '''To implement the solve to the duplication problem'''
+    '''solves to the duplication problem'''
 
     dataset=data_extraction.HDF5Dataset(file_path)
     train_size = int(train_ratio * len(dataset))
@@ -93,30 +96,28 @@ def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_dupl
 
     generator = torch.Generator().manual_seed(48)
     if sort_duplicates:
-        train_dataset, test_dataset=group_split(dataset, dictionary,generator, train_ratio)
+        train_dataset, test_dataset=group_split(dataset,file_path, dictionary,generator, train_ratio)
     else:
         train_dataset, test_dataset = random_split(dataset, [train_size, test_size],generator=generator)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle)
     return train_loader, test_loader
-def group_split(dataset, dictionary,generator, train_ratio=0.8):
+def group_split(dataset, file_path, dictionary,generator, train_ratio=0.8):
     """Split dataset into train/test SUCH THAT samples with the same ID stay together.
     Technically, there may be some variance to the training set proportion since not all Gbif indices have the same number of images."""
     n = len(dataset)
+    with h5py.File(file_path, "r") as f:
+        dict_indices = f["dict_idx"][:].flatten()
     # 1 — Extract IDs for each sample
-    ids = []
-    for i in range(n):
-        sample = dataset[i]
-        idx = sample[2]   #Dataset returns: (embedding, labbel, idx)
-        ids.append(dictionary.loc[idx, "gbifID"])
+    ids = dictionary.loc[dict_indices, "gbifID"].values  
     # 2 — Convert unique IDs to integers
     unique_ids = sorted(set(ids))
     id_to_int = {id_: i for i, id_ in enumerate(unique_ids)}
     int_ids = torch.tensor([id_to_int[id_] for id_ in ids])
     # 3 — Shuffle group IDs
     num_groups = len(unique_ids)
-    perm = torch.randperm(num_groups, generator)
+    perm = torch.randperm(num_groups, generator=generator)
     # 4 — Split group IDs
     test_size = int(num_groups * (1-train_ratio))
     test_groups = set(perm[:test_size].tolist())
@@ -175,7 +176,7 @@ class CustomMLP(nn.Module): #to encoode location (obsolete)
         return x
 class GeoCLIP_MLP(nn.Module): #to encoode location (obsolete)
     def __init__(self, input_dim, hidden_dim, output_dim):
-        super(CustomMLP, self).__init__()
+        super(GeoCLIP_MLP, self).__init__()
         self.lin1 = nn.Linear(input_dim, hidden_dim)
         self.relu1 = nn.ReLU()
         self.lin2 = nn.Linear(hidden_dim, hidden_dim)
@@ -241,9 +242,10 @@ class Fourier_MLP(nn.Module): #fourrier encoding followed by 2 layer MLP
 
 class RFF_MLPs(nn.Module):
     '''as in geoCLIP, RFF encodding, '''
-    def __init__(self, original_dim=2, fourier_dim=512, hidden_dim=1024, output_dim=512,M=3,sigma_min=1,sigma_max=256):
+    def __init__(self, original_dim=2, fourier_dim=512, hidden_dim=1024, output_dim=512,M=3,sigma_min=1,sigma_max=256,device="cuda"):
         '''fourrier_dim a multiple of original_dim (so even number)'''
         super(RFF_MLPs, self).__init__()
+        self.device=device
         self.original_dim=original_dim
         self.fourier_dim=fourier_dim
         self.hidden_dim=hidden_dim
@@ -264,6 +266,7 @@ class RFF_MLPs(nn.Module):
         
     def RFF(self, R, coords):
         '''coords: (batch_size, 2)'''
+        R = R.to(self.device)
         x=2*torch.pi*R@coords.T #shape (fourrier_dim/2 , batch_size)
         cos=torch.cos(x) 
         sin=torch.sin(x)
@@ -297,7 +300,8 @@ def train(doublenetwork,
           saving_frequency=1,
           nbr_checkppoints=None, 
           test_dataloader=None,
-          test_frequency=1
+          test_frequency=1,
+          nbr_tests=10
           ):
     '''nbr_chepoints < epochs, please'''
     #### initialization
@@ -333,7 +337,11 @@ def train(doublenetwork,
                     "learning_rate": lr,
                     "batch_size": batch_size,
                     "epochs": epochs,
-                    "current epoch (if stopped)" : ep}
+                    "current epoch (if stopped)" : ep,
+                    "saving_frequency":saving_frequency,
+                    "nbr_checkppoints":nbr_checkppoints, 
+                    "test_frequency":test_frequency,
+                    "nbr_tests": nbr_tests}
             config_path = os.path.join(save_name, "hyperparameters.json")
             with open(config_path, "w") as f:
                 json.dump(hparams, f, indent=4)
@@ -343,23 +351,86 @@ def train(doublenetwork,
             torch.save(doublenetwork.state_dict(), os.path.join(checkpoint_name, f"model.pt")) #overwrites the same file, so to avoid getting floded by saves
             torch.save(optimizer.state_dict(), os.path.join(checkpoint_name, f"optim.pt"))
             current_checkpoint +=1
-        if test_dataloader is not None and ep % test_frequency ==0:
+        if test_dataloader is not None and ep % test_frequency == 0:
             doublenetwork.eval()
             with torch.no_grad():
-                test_images, test_labels, _ = next(iter(test_dataloader))
-                test_images = test_images.to(device)
-                test_labels = test_labels.to(device)
+                total_loss = 0.0
+                for _ in range(nbr_tests):
+                    test_images, test_labels, _ = next(iter(test_dataloader))
+                    test_images = test_images.to(device)
+                    test_labels = test_labels.to(device)
 
-                test_logits = doublenetwork(test_images, test_labels)
-                test_loss = CE_loss(test_logits, device=device)
+                    test_logits = doublenetwork(test_images, test_labels)
+                    test_loss = CE_loss(test_logits, device=device)
+                    total_loss += test_loss.item()
 
-                writer.add_scalar("CE on test set", test_loss.item(), global_step=ep)
-            doublenetwork.train()
+                avg_loss = total_loss / nbr_tests
+                writer.add_scalar("CE on test set", avg_loss, global_step=ep)
+
+        doublenetwork.train()
     #######################
 
     doublenetwork.eval()
     writer.close()
     return doublenetwork
+
+
+import time
+import torch
+from tqdm import tqdm
+
+def minitrain(doublenetwork, dataloader, device="cuda"):
+    """
+    Run a few batches and print time per operation.
+    Useful for profiling bottlenecks.
+    """
+    doublenetwork = doublenetwork.to(device)
+    doublenetwork.train()
+    
+    optimizer = torch.optim.AdamW(doublenetwork.parameters(), lr=1e-4)
+    
+    # Only 1 epoch, 5 batches
+    for ep in range(1):
+        pbar = tqdm(dataloader)
+        for i, (images, labels, _) in enumerate(pbar):
+            if i >= 5:  # only profile first 5 batches
+                break
+
+            t0 = time.time()
+            # Move data to GPU
+            images = images.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            t1 = time.time()
+            print(f"[Batch {i}] to(device) time: {t1-t0:.4f}s")
+
+            # Forward pass
+            logits = doublenetwork(images, labels)
+            t2 = time.time()
+            print(f"[Batch {i}] forward time: {t2-t1:.4f}s")
+
+            # Loss computation
+            loss = CE_loss(logits, device=device)
+            t3 = time.time()
+            print(f"[Batch {i}] loss computation time: {t3-t2:.4f}s")
+
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
+            t4 = time.time()
+            print(f"[Batch {i}] backward time: {t4-t3:.4f}s")
+
+            # Optimizer step
+            optimizer.step()
+            t5 = time.time()
+            print(f"[Batch {i}] optimizer step time: {t5-t4:.4f}s")
+
+            # Logging (optional)
+            # writer.add_scalar("Cross-entropy", loss.item(), global_step=ep * len(dataloader) + i)
+            t6 = time.time()
+            print(f"[Batch {i}] logging time: {t6-t5:.4f}s")
+
+            print(f"[Batch {i}] total batch time: {t6-t0:.4f}s\n")
+
 class DoubleNetwork(nn.Module):
     def __init__(self, image_encoder, pos_encoder,device="cuda",temperature=0.07):
         super().__init__()
@@ -379,21 +450,20 @@ class DoubleNetwork(nn.Module):
         return logits
     
 class DoubleNetwork_V2(nn.Module):
-    def __init__(self, image_encoder, pos_encoder,device="cuda",temperature=0.07):
+    def __init__(self, pos_encoder,device="cuda",temperature=0.07):
         super().__init__()
-        self.image_encoder=image_encoder
         self.pos_encoder=pos_encoder
         self.logit_scale = nn.Parameter(torch.log(torch.tensor(1/temperature))).to(device)
         self.device=device
 
-        self.lin1=nn.Linear(768,768)
+        self.lin1=nn.Linear(768,768)#this is the image encoder
         self.relu=nn.ReLU()
         self.lin2=nn.Linear(768,512)
 
-    def forward(self, images, coordinates): #takes a batch of images and their labels
-        #returns the normalized pos/image similarity matrix
-        image_emb=self.image_encoder(images)
-        image_emb=self.lin1(image_emb)#see geoCLIP paper
+    def forward(self, image, coordinates): #takes a batch of images and their labels
+        '''returns the normalized pos/image similarity matrix'''
+        
+        image_emb=self.lin1(image)   #see geoCLIP paper
         image_emb=self.relu(image_emb)
         image_emb=self.lin2(image_emb)
 
