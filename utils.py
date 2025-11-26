@@ -5,7 +5,7 @@ from torchvision import models
 import torch.nn as nn
 import torch
 import torchvision
-from torch.utils.data import DataLoader, Dataset,random_split
+from torch.utils.data import DataLoader, Dataset,random_split, Subset
 import data_extraction
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
@@ -84,6 +84,51 @@ def dataloader_emb(file_path,batch_size,shuffle=False,train_proportion=0.8): #fr
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle)
     return train_loader, test_loader
 
+def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=False, dictionary=None): #from a h5 file
+    '''To implement the solve to the duplication problem'''
+
+    dataset=data_extraction.HDF5Dataset(file_path)
+    train_size = int(train_ratio * len(dataset))
+    test_size = len(dataset) - train_size
+
+    generator = torch.Generator().manual_seed(48)
+    if sort_duplicates:
+        train_dataset, test_dataset=group_split(dataset, dictionary,generator, train_ratio)
+    else:
+        train_dataset, test_dataset = random_split(dataset, [train_size, test_size],generator=generator)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle)
+    return train_loader, test_loader
+def group_split(dataset, dictionary,generator, train_ratio=0.8):
+    """Split dataset into train/test SUCH THAT samples with the same ID stay together.
+    Technically, there may be some variance to the training set proportion since not all Gbif indices have the same number of images."""
+    n = len(dataset)
+    # 1 — Extract IDs for each sample
+    ids = []
+    for i in range(n):
+        sample = dataset[i]
+        idx = sample[2]   #Dataset returns: (embedding, labbel, idx)
+        ids.append(dictionary.loc[idx, "gbifID"])
+    # 2 — Convert unique IDs to integers
+    unique_ids = sorted(set(ids))
+    id_to_int = {id_: i for i, id_ in enumerate(unique_ids)}
+    int_ids = torch.tensor([id_to_int[id_] for id_ in ids])
+    # 3 — Shuffle group IDs
+    num_groups = len(unique_ids)
+    perm = torch.randperm(num_groups, generator)
+    # 4 — Split group IDs
+    test_size = int(num_groups * (1-train_ratio))
+    test_groups = set(perm[:test_size].tolist())
+    train_groups = set(perm[test_size:].tolist())
+    # 5 — Assign samples
+    train_indices = [i for i in range(n) if int_ids[i].item() in train_groups]
+    test_indices  = [i for i in range(n) if int_ids[i].item() in test_groups]
+    # 6 — Build subsets
+    train_dataset = Subset(dataset, train_indices)
+    test_dataset = Subset(dataset, test_indices)
+
+    return train_dataset, test_dataset
 
 
 def get_resnet(dim_emb, device="cuda"):
@@ -128,6 +173,31 @@ class CustomMLP(nn.Module): #to encoode location (obsolete)
         x = self.relu2(x)
         x = self.lin3(x)
         return x
+class GeoCLIP_MLP(nn.Module): #to encoode location (obsolete)
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super(CustomMLP, self).__init__()
+        self.lin1 = nn.Linear(input_dim, hidden_dim)
+        self.relu1 = nn.ReLU()
+        self.lin2 = nn.Linear(hidden_dim, hidden_dim)
+        self.relu2 = nn.ReLU()
+        self.lin3 = nn.Linear(hidden_dim, hidden_dim)
+        self.relu3 = nn.ReLU()
+        self.lin4 = nn.Linear(hidden_dim, hidden_dim)
+        self.relu4 = nn.ReLU()
+        self.output = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x):
+        x = self.lin1(x)
+        x = self.relu1(x)
+        x = self.lin2(x)
+        x = self.relu2(x)
+        x = self.lin3(x)
+        x = self.relu4(x)
+        x = self.lin4(x)
+        x = self.output(x)
+
+        return x
+    
     
 
 class Fourier_MLP(nn.Module): #fourrier encoding followed by 2 layer MLP
@@ -140,6 +210,8 @@ class Fourier_MLP(nn.Module): #fourrier encoding followed by 2 layer MLP
         self.hidden_dim=hidden_dim
         self.output_dim=output_dim
         self.MLP=CustomMLP(fourier_dim, hidden_dim, output_dim)
+
+        
 
     def forward(self, coord):
         x=self.fourier_enc(coord)
@@ -167,7 +239,53 @@ class Fourier_MLP(nn.Module): #fourrier encoding followed by 2 layer MLP
         encoded = encoded.view(batch_size, -1)
         return encoded
 
-    
+class RFF_MLPs(nn.Module):
+    '''as in geoCLIP, RFF encodding, '''
+    def __init__(self, original_dim=2, fourier_dim=512, hidden_dim=1024, output_dim=512,M=3,sigma_min=1,sigma_max=256):
+        '''fourrier_dim a multiple of original_dim (so even number)'''
+        super(RFF_MLPs, self).__init__()
+        self.original_dim=original_dim
+        self.fourier_dim=fourier_dim
+        self.hidden_dim=hidden_dim
+        self.output_dim=output_dim
+        self.M = M
+
+
+        self.sigmas=self.compute_sigmas(sigma_min,sigma_max,M)
+
+        self.MLP_list = nn.ModuleList([GeoCLIP_MLP(fourier_dim, hidden_dim, output_dim) for _ in range(M)]) #syntax for lists of modules
+
+        self.R_list = []
+        for i in range(M):#forum: register_buffer => Tensor which is not a parameter, but should be part of the modules state
+            R = torch.randn((fourier_dim//original_dim, original_dim)) * self.sigmas[i]
+            self.register_buffer(f'R_{i}', R)
+            self.R_list.append(getattr(self, f'R_{i}'))
+
+        
+    def RFF(self, R, coords):
+        '''coords: (batch_size, 2)'''
+        x=2*torch.pi*R@coords.T #shape (fourrier_dim/2 , batch_size)
+        cos=torch.cos(x) 
+        sin=torch.sin(x)
+        return torch.cat((cos, sin), dim=0).T # (batch_size, fourier_dim)
+
+    def compute_sigmas(self, sigma_min, sigma_max, M):
+        '''Formula for sigmas in geoCLIP paper'''
+        i = torch.arange(1, M+1, dtype=torch.float32) 
+        log_sigma_min = torch.log2(torch.tensor(sigma_min))
+        log_sigma_max = torch.log2(torch.tensor(sigma_max))
+        sigmas = 2 ** (log_sigma_min + (i - 1) * (log_sigma_max - log_sigma_min) / (M - 1))
+        return sigmas
+    def forward(self, coords):
+        '''sums the output of all the MLPs'''
+        out = torch.zeros(coords.size(0), self.output_dim, device=coords.device)
+        for i in range(self.M):
+            rff = self.RFF(self.R_list[i], coords)  # (batch_size, fourier_dim)
+            out += self.MLP_list[i](rff)           # (batch_size, output_dim)
+        return out
+
+
+                      
 
 def train(doublenetwork,
           epochs,
@@ -242,7 +360,6 @@ def train(doublenetwork,
     doublenetwork.eval()
     writer.close()
     return doublenetwork
-
 class DoubleNetwork(nn.Module):
     def __init__(self, image_encoder, pos_encoder,device="cuda",temperature=0.07):
         super().__init__()
@@ -254,6 +371,33 @@ class DoubleNetwork(nn.Module):
     def forward(self, images, coordinates): #takes a batch of images and their labels
         #returns the normalized pos/image similarity matrix
         image_emb=self.image_encoder(images)
+        pos_emb=self.pos_encoder(coordinates)
+        image_emb = image_emb / image_emb.norm(dim=1, keepdim=True)
+        pos_emb = pos_emb / pos_emb.norm(dim=1, keepdim=True)
+        # Compute cosine similarity (dot product here)
+        logits = image_emb @ pos_emb.t()*self.logit_scale.exp()
+        return logits
+    
+class DoubleNetwork_V2(nn.Module):
+    def __init__(self, image_encoder, pos_encoder,device="cuda",temperature=0.07):
+        super().__init__()
+        self.image_encoder=image_encoder
+        self.pos_encoder=pos_encoder
+        self.logit_scale = nn.Parameter(torch.log(torch.tensor(1/temperature))).to(device)
+        self.device=device
+
+        self.lin1=nn.Linear(768,768)
+        self.relu=nn.ReLU()
+        self.lin2=nn.Linear(768,512)
+
+    def forward(self, images, coordinates): #takes a batch of images and their labels
+        #returns the normalized pos/image similarity matrix
+        image_emb=self.image_encoder(images)
+        image_emb=self.lin1(image_emb)#see geoCLIP paper
+        image_emb=self.relu(image_emb)
+        image_emb=self.lin2(image_emb)
+
+
         pos_emb=self.pos_encoder(coordinates)
         image_emb = image_emb / image_emb.norm(dim=1, keepdim=True)
         pos_emb = pos_emb / pos_emb.norm(dim=1, keepdim=True)
