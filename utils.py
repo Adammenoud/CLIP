@@ -8,11 +8,15 @@ import torchvision
 from torch.utils.data import DataLoader, Dataset,random_split, Subset
 import data_extraction
 from tqdm import tqdm
-from torch.utils.tensorboard import SummaryWriter
-import os
-import json
 from pyproj import Transformer
 import h5py
+from sklearn.decomposition import PCA
+import joblib
+from sklearn.preprocessing import StandardScaler
+import geopandas as gpd
+from shapely.geometry import Point
+from shapely import geometry as geom
+import regionmask
 
 
 def noise(input, std):
@@ -132,360 +136,13 @@ def group_split(dataset, file_path, dictionary,generator, train_ratio=0.8):
     return train_dataset, test_dataset
 
 
-def get_resnet(dim_emb, device="cuda"):
-    model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1) #can also set weights to None
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, dim_emb) 
-    model = model.to(device)
-    return model  
-
-def CE_loss(logits, device="cuda"):
-    '''logits of size (n, n), containing the cosine similarities (n would be batch size for CLIP)'''
-    # Create labels
-    labels = torch.arange(logits.size(0)).to(device)
-
-    loss_fn = nn.CrossEntropyLoss()
-
-    # Image-to-Text
-    loss_i2t = loss_fn(logits, labels)
-
-    # Text-to-Image (transpose logits)
-    loss_t2i = loss_fn(logits.T, labels)
-
-    # Total symmetric loss
-    loss = (loss_i2t + loss_t2i) / 2
-    
-    return loss
 
 
-class CustomMLP(nn.Module): #to encoode location (obsolete)
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        super(CustomMLP, self).__init__()
-        self.lin1 = nn.Linear(input_dim, hidden_dim)
-        self.relu1 = nn.ReLU()
-        self.lin2 = nn.Linear(hidden_dim, hidden_dim)
-        self.relu2 = nn.ReLU()
-        self.lin3 = nn.Linear(hidden_dim, output_dim)
-
-    def forward(self, x):
-        x = self.lin1(x)
-        x = self.relu1(x)
-        x = self.lin2(x)
-        x = self.relu2(x)
-        x = self.lin3(x)
-        return x
-class GeoCLIP_MLP(nn.Module): #to encoode location (obsolete)
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        super(GeoCLIP_MLP, self).__init__()
-        self.lin1 = nn.Linear(input_dim, hidden_dim)
-        self.relu1 = nn.ReLU()
-        self.lin2 = nn.Linear(hidden_dim, hidden_dim)
-        self.relu2 = nn.ReLU()
-        self.lin3 = nn.Linear(hidden_dim, hidden_dim)
-        self.relu3 = nn.ReLU()
-        self.lin4 = nn.Linear(hidden_dim, hidden_dim)
-        self.relu4 = nn.ReLU()
-        self.output = nn.Linear(hidden_dim, output_dim)
-
-    def forward(self, x):
-        x = self.lin1(x)
-        x = self.relu1(x)
-        x = self.lin2(x)
-        x = self.relu2(x)
-        x = self.lin3(x)
-        x = self.relu4(x)
-        x = self.lin4(x)
-        x = self.output(x)
-
-        return x
-    
-    
-
-class Fourier_MLP(nn.Module): #fourrier encoding followed by 2 layer MLP
-    def __init__(self, original_dim, fourier_dim, hidden_dim, output_dim, device="cuda"): #fourrier_dim must be a multiple of 2*originaldim
-        super(Fourier_MLP, self).__init__()
-
-        self.device=device
-        self.original_dim=original_dim
-        self.fourier_dim=fourier_dim
-        self.hidden_dim=hidden_dim
-        self.output_dim=output_dim
-        self.MLP=CustomMLP(fourier_dim, hidden_dim, output_dim)
-
-        
-
-    def forward(self, coord):
-        x=self.fourier_enc(coord)
-        x=self.MLP(x)
-        return x
-            
-
-    def fourier_enc(self, x, scales=None):
-        # x: (batch_size, 2)
-        batch_size, input_dim = x.shape
-        # Default scales if not provided
-        if scales is None:
-            # Half of fourier_dim for sin, half for cos
-            scales = torch.arange(self.fourier_dim // (2 * input_dim), dtype=torch.float32).to(self.device)
-        # Expand x to shape (batch_size, input_dim, 1)
-        x_expanded = x.unsqueeze(-1)  # (batch_size, input_dim, 1)
-        # Compute scaled inputs: (batch_size, input_dim, num_scales)
-        scaled = x_expanded / (2.0 ** scales)  # broadcasting
-        # Compute sine and cosine encodings
-        sin_enc = torch.sin(scaled)
-        cos_enc = torch.cos(scaled)
-        # Concatenate sin and cos along last dimension
-        encoded = torch.cat([sin_enc, cos_enc], dim=-1)  # (batch_size, input_dim, num_scales*2)
-        # Flatten last two dimensions to get final shape: (batch_size, fourier_dim)
-        encoded = encoded.view(batch_size, -1)
-        return encoded
-
-class RFF_MLPs(nn.Module):
-    '''as in geoCLIP, RFF encodding, '''
-    def __init__(self, original_dim=2, fourier_dim=512, hidden_dim=1024, output_dim=512,M=3,sigma_min=1,sigma_max=256,device="cuda"):
-        '''fourrier_dim a multiple of original_dim (so even number)'''
-        super(RFF_MLPs, self).__init__()
-        self.device=device
-        self.original_dim=original_dim
-        self.fourier_dim=fourier_dim
-        self.hidden_dim=hidden_dim
-        self.output_dim=output_dim
-        self.M = M
 
 
-        self.sigmas=self.compute_sigmas(sigma_min,sigma_max,M)
-
-        self.MLP_list = nn.ModuleList([GeoCLIP_MLP(fourier_dim, hidden_dim, output_dim) for _ in range(M)]) #syntax for lists of modules
-
-        self.R_list = []
-        for i in range(M):#forum: register_buffer => Tensor which is not a parameter, but should be part of the modules state
-            R = torch.randn((fourier_dim//original_dim, original_dim)) * self.sigmas[i]
-            self.register_buffer(f'R_{i}', R)
-            self.R_list.append(getattr(self, f'R_{i}'))
-
-        
-    def RFF(self, R, coords):
-        '''coords: (batch_size, 2)'''
-        R = R.to(self.device)
-        x=2*torch.pi*R@coords.T #shape (fourrier_dim/2 , batch_size)
-        cos=torch.cos(x) 
-        sin=torch.sin(x)
-        return torch.cat((cos, sin), dim=0).T # (batch_size, fourier_dim)
-
-    def compute_sigmas(self, sigma_min, sigma_max, M):
-        '''Formula for sigmas in geoCLIP paper'''
-        i = torch.arange(1, M+1, dtype=torch.float32) 
-        log_sigma_min = torch.log2(torch.tensor(sigma_min))
-        log_sigma_max = torch.log2(torch.tensor(sigma_max))
-        sigmas = 2 ** (log_sigma_min + (i - 1) * (log_sigma_max - log_sigma_min) / (M - 1))
-        return sigmas
-    def forward(self, coords):
-        '''sums the output of all the MLPs'''
-        out = torch.zeros(coords.size(0), self.output_dim, device=coords.device)
-        for i in range(self.M):
-            rff = self.RFF(self.R_list[i], coords)  # (batch_size, fourier_dim)
-            out += self.MLP_list[i](rff)           # (batch_size, output_dim)
-        return out
 
 
-                      
 
-def train(doublenetwork,
-          epochs,
-          dataloader,
-          batch_size,
-          lr=1e-4,
-          device="cuda",
-          save_name=None,
-          saving_frequency=1,
-          nbr_checkppoints=None, 
-          test_dataloader=None,
-          test_frequency=1,
-          nbr_tests=10
-          ):
-    '''nbr_chepoints < epochs, please'''
-    #### initialization
-    doublenetwork = doublenetwork.to(device)
-    doublenetwork.train()
-    writer =  SummaryWriter()
-    optimizer=torch.optim.AdamW(doublenetwork.parameters(),lr=lr)
-    l = len(dataloader)
-    current_checkpoint=1
-    #### training loop
-    for ep in range(epochs):
-        pbar = tqdm(dataloader)
-        for i, (images, labels,_) in enumerate(pbar):
-            images = images.to(device)
-            labels = labels.to(device)
-            logits=doublenetwork(images,labels) #logits of cosine similarities
-            loss=CE_loss(logits,device=device)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            pbar.set_postfix(CE=loss.item())
-            writer.add_scalar("Cross-entropy", loss.item(), global_step=ep * l + i)
-    ################################# logs and savings
-        if ep % saving_frequency == 0 and (save_name is not None):
-            os.makedirs(save_name, exist_ok=True)
-            torch.save(doublenetwork.state_dict(), os.path.join(save_name, f"model.pt")) #overwrites the same file, so to avoid getting floded by saves
-            torch.save(optimizer.state_dict(), os.path.join(save_name, f"optim.pt"))
-            hparams = {
-                    "save_name" : save_name,
-                    "saving_frequency" : saving_frequency,
-                    "learning_rate": lr,
-                    "batch_size": batch_size,
-                    "epochs": epochs,
-                    "current epoch (if stopped)" : ep,
-                    "saving_frequency":saving_frequency,
-                    "nbr_checkppoints":nbr_checkppoints, 
-                    "test_frequency":test_frequency,
-                    "nbr_tests": nbr_tests}
-            config_path = os.path.join(save_name, "hyperparameters.json")
-            with open(config_path, "w") as f:
-                json.dump(hparams, f, indent=4)
-        if save_name is not None and nbr_checkppoints is not None and ep % (epochs//nbr_checkppoints)==0 and ep!= 0:
-            checkpoint_name = f"{save_name}_checkpoint_{current_checkpoint}"
-            os.makedirs(checkpoint_name, exist_ok=True)
-            torch.save(doublenetwork.state_dict(), os.path.join(checkpoint_name, f"model.pt")) #overwrites the same file, so to avoid getting floded by saves
-            torch.save(optimizer.state_dict(), os.path.join(checkpoint_name, f"optim.pt"))
-            current_checkpoint +=1
-        if test_dataloader is not None and ep % test_frequency == 0:
-            doublenetwork.eval()
-            with torch.no_grad():
-                total_loss = 0.0
-                for _ in range(nbr_tests):
-                    test_images, test_labels, _ = next(iter(test_dataloader))
-                    test_images = test_images.to(device)
-                    test_labels = test_labels.to(device)
-
-                    test_logits = doublenetwork(test_images, test_labels)
-                    test_loss = CE_loss(test_logits, device=device)
-                    total_loss += test_loss.item()
-
-                avg_loss = total_loss / nbr_tests
-                writer.add_scalar("CE on test set", avg_loss, global_step=ep)
-
-        doublenetwork.train()
-    #######################
-
-    doublenetwork.eval()
-    writer.close()
-    return doublenetwork
-
-
-import time
-import torch
-from tqdm import tqdm
-
-def minitrain(doublenetwork, dataloader, device="cuda"):
-    """
-    Run a few batches and print time per operation.
-    Useful for profiling bottlenecks.
-    """
-    doublenetwork = doublenetwork.to(device)
-    doublenetwork.train()
-    
-    optimizer = torch.optim.AdamW(doublenetwork.parameters(), lr=1e-4)
-    
-    # Only 1 epoch, 5 batches
-    for ep in range(1):
-        pbar = tqdm(dataloader)
-        for i, (images, labels, _) in enumerate(pbar):
-            if i >= 5:  # only profile first 5 batches
-                break
-
-            t0 = time.time()
-            # Move data to GPU
-            images = images.to(device, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
-            t1 = time.time()
-            print(f"[Batch {i}] to(device) time: {t1-t0:.4f}s")
-
-            # Forward pass
-            logits = doublenetwork(images, labels)
-            t2 = time.time()
-            print(f"[Batch {i}] forward time: {t2-t1:.4f}s")
-
-            # Loss computation
-            loss = CE_loss(logits, device=device)
-            t3 = time.time()
-            print(f"[Batch {i}] loss computation time: {t3-t2:.4f}s")
-
-            # Backward pass
-            optimizer.zero_grad()
-            loss.backward()
-            t4 = time.time()
-            print(f"[Batch {i}] backward time: {t4-t3:.4f}s")
-
-            # Optimizer step
-            optimizer.step()
-            t5 = time.time()
-            print(f"[Batch {i}] optimizer step time: {t5-t4:.4f}s")
-
-            # Logging (optional)
-            # writer.add_scalar("Cross-entropy", loss.item(), global_step=ep * len(dataloader) + i)
-            t6 = time.time()
-            print(f"[Batch {i}] logging time: {t6-t5:.4f}s")
-
-            print(f"[Batch {i}] total batch time: {t6-t0:.4f}s\n")
-
-class DoubleNetwork(nn.Module):
-    def __init__(self, image_encoder, pos_encoder,device="cuda",temperature=0.07):
-        super().__init__()
-        self.image_encoder=image_encoder
-        self.pos_encoder=pos_encoder
-        self.logit_scale = nn.Parameter(torch.log(torch.tensor(1/temperature))).to(device)
-        self.device=device
-
-    def forward(self, images, coordinates): #takes a batch of images and their labels
-        #returns the normalized pos/image similarity matrix
-        image_emb=self.image_encoder(images)
-        pos_emb=self.pos_encoder(coordinates)
-        image_emb = image_emb / image_emb.norm(dim=1, keepdim=True)
-        pos_emb = pos_emb / pos_emb.norm(dim=1, keepdim=True)
-        # Compute cosine similarity (dot product here)
-        logits = image_emb @ pos_emb.t()*self.logit_scale.exp()
-        return logits
-    
-class DoubleNetwork_V2(nn.Module):
-    def __init__(self, pos_encoder,device="cuda",temperature=0.07):
-        super().__init__()
-        self.pos_encoder=pos_encoder
-        self.logit_scale = nn.Parameter(torch.log(torch.tensor(1/temperature))).to(device)
-        self.device=device
-
-        self.lin1=nn.Linear(768,768)#this is the image encoder
-        self.relu=nn.ReLU()
-        self.lin2=nn.Linear(768,512)
-
-    def forward(self, image, coordinates): #takes a batch of images and their labels
-        '''returns the normalized pos/image similarity matrix'''
-        
-        image_emb=self.lin1(image)   #see geoCLIP paper
-        image_emb=self.relu(image_emb)
-        image_emb=self.lin2(image_emb)
-
-
-        pos_emb=self.pos_encoder(coordinates)
-        image_emb = image_emb / image_emb.norm(dim=1, keepdim=True)
-        pos_emb = pos_emb / pos_emb.norm(dim=1, keepdim=True)
-        # Compute cosine similarity (dot product here)
-        logits = image_emb @ pos_emb.t()*self.logit_scale.exp()
-        return logits
-    
-
-
-''' Syntax for model saving
-Save:
-torch.save(model.state_dict(), PATH)
-
-Load:
-model = TheModelClass(*args, **kwargs)
-model.load_state_dict(torch.load(PATH, weights_only=True)) #Model must be initialized BEFORE loading optimizer state. No weight_only argument for optimizers
-model.eval()
-'''
 
 def test_similarity(data_file_name,doublenetwork, nbr_samples=2,device="cuda",nbr_iter=10, plot_sims=False):
     '''Picks random samples and gives the (average) similarity between the image emmbedding and the coordinate embedding'''
@@ -553,3 +210,122 @@ def coord_trans(x, y, order="CH_to_normal"):
     else:
         raise ValueError("order must be either 'CH_to_normal' or 'normal_to_CH'")
     return x_out, y_out
+
+
+def perform_PCA(dataloader, img_enc, device="cuda", file_name="pca_model", n_components=None, n_sample=None):
+    """load with pca_model = joblib.load('pca_model.pkl')"""
+    all_embeddings = []
+    
+    counter=0
+    for embeddings, labels, _ in tqdm(dataloader, desc="Computing embeddings for PCA"):
+        embeddings = embeddings.to(device)
+        embeddings = img_enc(embeddings)  # get the actual encoded vectors
+        all_embeddings.append(embeddings.detach().cpu().numpy())
+        counter+= embeddings.shape[0]
+        if n_sample is not None and counter>=n_sample:
+            break
+
+    embeddings = np.vstack(all_embeddings)
+    scaler = StandardScaler()
+    scaler.fit(embeddings)
+    embeddings = scaler.transform(embeddings)
+    pca = PCA(n_components=n_components)
+    pca.fit(embeddings)
+    joblib.dump(pca, f"PCA_models/{file_name}.pkl")
+
+
+
+def coord_to_PCA(coords, pos_enc,pca_model_path, comp_idx=1): 
+    '''takes coordinates and return the principal value associated to it. Considers the comp_idx-th component'''
+    pca_model=joblib.load(pca_model_path)
+    embeddings=pos_enc(coords).cpu()
+    vect_to_plot = pca_model.transform(embeddings.detach().numpy())
+    return vect_to_plot[:,comp_idx]
+
+def plot_country_values(country_name, fct_to_plot,pos_encoder,pca_model_path="PCA_All_comp_full_dataset_Normalized.pkl", grid_resolution=0.1, cmap='viridis',device="cuda",comp_idx=0,save_path=None):
+    coords = create_country_grid(country_name, grid_resolution)
+    values = fct_to_plot(coords.to(device), pos_encoder,pca_model_path,comp_idx=comp_idx)#np.array([coord_trans(coord) for coord in coords])
+
+    # Get the country polygon
+    countries = regionmask.defined_regions.natural_earth_v5_0_0.countries_10
+    idx = list(countries.names).index(country_name)
+    polygon = countries.polygons[idx]
+    if country_name=="France":
+        # Natural Earth polygons are MultiPolygon objects
+        parts = list(polygon.geoms)
+
+        # Metropolitan France lies roughly between lon -5 to 10 and lat 42 to 52
+        bbox_metro = geom.box(minx=-10, miny=40, maxx=15, maxy=55)
+
+        # Keep only polygons that intersect this box
+        metro_parts = [p for p in parts if p.intersects(bbox_metro)]
+        if len(metro_parts) == 0:
+            raise RuntimeError("Could not isolate metropolitan France polygon.")
+
+        polygon = geom.MultiPolygon(metro_parts)
+    boundary = gpd.GeoSeries([polygon])
+
+    fig, ax = plt.subplots(figsize=(8, 10))
+    boundary.plot(ax=ax, color="none", edgecolor="black")
+    sc = ax.scatter(coords[:, 0], coords[:, 1], c=values, cmap=cmap, s=20)
+    plt.colorbar(sc, ax=ax, label="Value")
+    ax.set_title(f"Values over {country_name}")
+    if save_path is None:
+        plt.show()
+    else:
+        plt.savefig(save_path)
+
+def create_country_grid(country_name, grid_resolution=0.1):
+    # Load 110m Natural Earth countries
+    countries = regionmask.defined_regions.natural_earth_v5_0_0.countries_10
+    # Find the index of the country
+    try:
+        idx = list(countries.names).index(country_name)
+    except ValueError:
+        raise ValueError(f"Country '{country_name}' not found in regionmask.")
+
+    polygon = countries.polygons[idx]
+    if country_name=="France":
+        # Natural Earth polygons are MultiPolygon objects
+        parts = list(polygon.geoms)
+
+        # Metropolitan France lies roughly between lon -5 to 10 and lat 42 to 52
+        bbox_metro = geom.box(minx=-10, miny=40, maxx=15, maxy=55)
+
+        # Keep only polygons that intersect this box
+        metro_parts = [p for p in parts if p.intersects(bbox_metro)]
+
+        if len(metro_parts) == 0:
+            raise RuntimeError("Could not isolate metropolitan France polygon.")
+
+        polygon = geom.MultiPolygon(metro_parts)
+    # Create a lon/lat grid covering the bounding box
+    minx, miny, maxx, maxy = polygon.bounds
+    lon_grid = np.arange(minx, maxx, grid_resolution)
+    lat_grid = np.arange(miny, maxy, grid_resolution)
+    lon_mesh, lat_mesh = np.meshgrid(lon_grid, lat_grid)
+    coords = np.column_stack([lon_mesh.ravel(), lat_mesh.ravel()])
+
+    # Keep only points inside the polygon
+    coords_inside = np.array([coord for coord in coords if polygon.contains(Point(coord))])
+    print (coords_inside.shape)
+    coords_inside= torch.tensor(coords_inside, dtype=torch.float32)
+    return coords_inside #returns a torch tensor
+
+def do_and_plot_PCA(model, data_path,pca_file_name,nbr_components=None, nbr_plots=3, batch_size=4064, sort_duplicates=False,dictionary=None,country_name="Switzerland",save_path=None):
+
+    if not hasattr(model, "img_encoder"): #compatibility issues
+        img_encoder = nn.Sequential(model.lin1,model.relu,model.lin2)
+    else:
+        img_encoder=model.image_encoder
+
+    dataloader, _ =dataloader_emb(data_path,batch_size=batch_size, shuffle=True,train_ratio=0.8, sort_duplicates=sort_duplicates, dictionary=dictionary)
+    perform_PCA(dataloader, img_enc=img_encoder, device="cuda", file_name=pca_file_name, n_components=nbr_components, n_sample=None)
+
+    pca_model_path=f"PCA_models/{pca_file_name}.pkl"
+    for i in range(nbr_plots):
+        plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=model.pos_encoder,pca_model_path=pca_model_path, grid_resolution=0.01, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path)
+
+def plot_PCA(pca_model_path,nbr_plots,pos_encoder,country_name="Switzerland",save_path=None):
+    for i in range(nbr_plots):
+        plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=pos_encoder,pca_model_path=pca_model_path, grid_resolution=0.01, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path)
