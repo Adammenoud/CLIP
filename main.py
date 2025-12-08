@@ -18,15 +18,19 @@ import utils
 import nn_classes
 import data_extraction
 import hdf5
+import torch
+from geoclip import LocationEncoder
+
+
 
 #seed
 np.random.seed(48)
 torch.manual_seed(48)
 #--------------------------------------------------------------------------------------
-nbr_epochs=300
+nbr_epochs=100
 device="cuda"
 batch_size=4096#4096 previoulsy #"We use batch size |B| as 512 when training on full dataset. For data-efficient settings with 20%, 10%, and 5% of the data, we use |B| as 256, 256, and 128 respectively"
-save_name="high_frequency_encoding"
+save_name="geoclip_pos_enc_and_2_512_layers"
 data_path="embeddings_data_and_dictionaries/bioCLIP_full_dataset_embeddings.h5"
 #Fetching data
 
@@ -39,13 +43,16 @@ dictionary=data_extraction.get_dictionary(30000, path_occurences, path_multimedi
 dictionary.to_csv("test_30000_data_dictionary")
 '''
 
+
+dictionary=pd.read_csv("embeddings_data_and_dictionaries/data_dictionary_sciName")
+
 '''
 print("downloading embeddings")
 #make embeddings
-data_extraction.download_emb(dictionary, dim_emb=768, output_dir="downloaded_embeddings_30000")
+data_extraction.download_emb(dictionary, dim_emb=768, output_dir="downloaded_embeddings_Switwerland")
 print("download finished")
 '''
-dictionary=pd.read_csv("embeddings_data_and_dictionaries/data_dictionary_sciName")
+
 #I got 3167055 embeddings: 11 failed,for instance:
 #Failed to download https://bs.plantnet.org/image/o/f20e1710cd58e9cc0f5816351719600476293e5b
 #Failed to download https://bs.plantnet.org/image/o/21b326f1faf2216108193b5305bb05828ee4551d
@@ -89,17 +96,29 @@ model=utils.train(
             '''
 
 #tensorboard --logdir=runs
-dim_fourier_encoding=64 #multiple of 4!!
-dim_hidden=256
-dim_emb=128 #this one is actually shared with img embeddings
-max_freq=dim_fourier_encoding // (2 * 2)
-scales = torch.arange(4, max_freq+4, dtype=torch.float32).to("cuda")
-print("scales:",scales)
-pos_encoder= nn_classes.Fourier_MLP(original_dim=2, fourier_dim=dim_fourier_encoding, hidden_dim=dim_hidden, output_dim=dim_emb)
+device="cuda"
+data_path="embeddings_data_and_dictionaries/bioCLIP_full_dataset_embeddings.h5"
+dim_fourier_encoding=512 #multiple of 4!!
+dim_hidden=1024
+dim_emb=512 #this one is actually shared with img embeddings
+
+geoclip_pos_encoder = LocationEncoder() #embeds into 512
+pos_encoder = geoclip_pos_encoder = nn.Sequential(
+    LocationEncoder(),
+    nn.Linear(512, 512),
+    nn.ReLU(),
+    nn.Linear(512, 512)
+)
+
+#pos_encoder= nn_classes.RFF_MLPs(original_dim=2, fourier_dim=dim_fourier_encoding, hidden_dim=dim_hidden, output_dim=dim_emb,M=8,sigma_min=2,sigma_max=256, number_layers=4)
 #pos_encoder=utils.RFF_MLPs( original_dim=2, fourier_dim=dim_fourier_encoding, hidden_dim=dim_hidden, output_dim=512,M=8,sigma_min=1,sigma_max=256).to(device)
 
 model= nn_classes.DoubleNetwork_V2(pos_encoder,dim_hidden=768,dim_output=dim_emb).to(device)
-print(summary(model))
+
+
+#pos_encoder= nn_classes.Cov_Fourier_MLP(fourier_dim=dim_fourier_encoding, hidden_dim=dim_hidden, output_dim=dim_emb, covariate_dim=covariate_dim)
+#pos_encoder=nn_classes.Fourier_MLP(original_dim=2, fourier_dim=dim_fourier_encoding, hidden_dim=dim_hidden, output_dim=dim_emb)
+
 model=nn_classes.train(
             model,
             nbr_epochs,
@@ -109,12 +128,8 @@ model=nn_classes.train(
             device="cuda",
             save_name=save_name,
             saving_frequency=1,
-            nbr_checkppoints=60, 
+            nbr_checkppoints=20,   ########
             test_dataloader=test_dataloader,
             test_frequency=1,
             nbr_tests=10
             )
-
-
-pca_file_name=f"pca_{save_name}"
-utils.do_and_plot_PCA(model, data_path,pca_file_name,nbr_components=None, nbr_plots=3, batch_size=4064, sort_duplicates=True,dictionary=dictionary,country_name="Switzerland",save_path=save_name)

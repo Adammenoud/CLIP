@@ -12,11 +12,14 @@ from pyproj import Transformer
 import h5py
 from sklearn.decomposition import PCA
 import joblib
+from pathlib import Path
 from sklearn.preprocessing import StandardScaler
 import geopandas as gpd
 from shapely.geometry import Point
 from shapely import geometry as geom
 import regionmask
+import rasterio
+import pandas as pd
 
 
 def noise(input, std):
@@ -144,13 +147,21 @@ def group_split(dataset, file_path, dictionary,generator, train_ratio=0.8):
 
 
 
-def test_similarity(data_file_name,doublenetwork, nbr_samples=2,device="cuda",nbr_iter=10, plot_sims=False):
-    '''Picks random samples and gives the (average) similarity between the image emmbedding and the coordinate embedding'''
-    _ , dataloader=dataloader_emb(data_file_name,batch_size=nbr_samples,shuffle=True) #test set
+def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,device="cuda", plot_sims=True,sort_duplicates=True, dictionary_path="embeddings_data_and_dictionaries/data_dictionary_sciName"):
+    '''Picks random samples and gives the (average) similarity between the image emmbedding and the coordinate embedding
+    dictionary is used to get the dataloader. It can be set to None, together with
+    '''
+    if dictionary_path is not None:
+        dictionary=pd.read_csv(dictionary_path)
+    else:
+        dictionary=None
+    _ , dataloader=dataloader_emb(data_file_name,batch_size=nbr_samples,shuffle=True,sort_duplicates=sort_duplicates, dictionary=dictionary) #test set
     doublenetwork.eval()
 
     results = []
     data_iter = iter(dataloader)  # manual iterator
+    all_sim_values = []
+    all_asim_values = []
 
     for _ in tqdm(range(nbr_iter), desc="Computing similarities"):
         try:
@@ -165,39 +176,45 @@ def test_similarity(data_file_name,doublenetwork, nbr_samples=2,device="cuda",nb
         logits=doublenetwork(emb_vectors,coord)
 
         logits=logits/doublenetwork.logit_scale.exp()
-
-        sim=logits.diagonal().mean()
-
+        #get values
+        sim=logits.diagonal()
         non_diag_mask = ~torch.eye(logits.size(0), dtype=torch.bool).to(device)
-        assim = logits[non_diag_mask].mean()
-        score=(sim,assim)
-        if not torch.isnan(sim) and not torch.isnan(assim): #NaN if only one value in the batch for instance; in that case, drop that value
-            results.append(score)
-    # Compute mean and std for each element in the tuple
-    mean = tuple(
-        sum(x[i] for x in results) / len(results) for i in range(2)
-    )
-    std = tuple(
-        torch.sqrt(sum((x[i] - mean[i])**2 for x in results) / len(results))
-        for i in range(2)
-    )
+        asim = logits[non_diag_mask]
+        #Nan
+        sim = sim[~torch.isnan(sim)]
+        asim = asim[~torch.isnan(asim)]
+        #log
+        all_sim_values.append(sim)
+        all_asim_values.append(asim)
+    # concatenate everything
+    all_sim_values = torch.cat(all_sim_values)         # shape (N_matches,)
+    all_asim_values = torch.cat(all_asim_values) 
+    # Compute mean and std
+    mean_sim  = all_sim_values.mean().item()
+    mean_asim = all_asim_values.mean().item()
+    std_sim   = all_sim_values.std().item()
+    std_asim  = all_asim_values.std().item()
     if plot_sims:
-        sim_list, asim_list = zip(*results) #transposes list of tuples into tuple of lists
-        sim_list = [x.item() for x in sim_list]
-        asim_list = [x.item() for x in asim_list]
-        plot(sim_list,"Similarity for coresponding pairs")
-        plot(asim_list,"Similarity for non-coresponding pairs")
-
-
-    return mean[0], mean[1], std[0] , std[1] #respectively similarity and asimilarity
+        plot_both(all_sim_values.cpu().tolist(),
+                all_asim_values.cpu().tolist(),
+                "Similarity vs Asimilarity Distribution")
+    return mean_sim, mean_asim, std_sim, std_asim
         
-def plot(data, title,bins=50):
-    #data=data.cpu().numpy()
-    plt.hist(data, bins=bins, edgecolor='black',alpha=0.5)  # bins control the granularity
-    plt.xlabel('Value')
-    plt.ylabel('Frequency')
+def plot_both(sim_data, asim_data, title, bins=50):
+    plt.figure(figsize=(8, 5))
+
+    plt.hist(sim_data, bins=bins, density=True, alpha=0.5, label="Corresponding pairs")
+    plt.hist(asim_data, bins=bins, density=True, alpha=0.5, label="Random pairs")
+
+    plt.xlabel("Similarity score")
+    plt.ylabel("Density")
     plt.title(title)
-    plt.savefig(title)
+    plt.legend()
+    plt.tight_layout()
+
+    plt.savefig(title + ".png")
+    plt.close()
+
 
 def coord_trans(x, y, order="CH_to_normal"):
 
@@ -211,6 +228,16 @@ def coord_trans(x, y, order="CH_to_normal"):
         raise ValueError("order must be either 'CH_to_normal' or 'normal_to_CH'")
     return x_out, y_out
 
+def coord_trans_shift(x,y, order="CH_to_normal"):
+    "converts from the NCEAS dataset coordinates to regular lat, lon (and vice versa)"
+    shift_x, shift_y= (1011627.4909483634, -100326.1477937577) #See "coordinates.ipynb"
+    if order=="CH_to_normal":
+        lons, lats = coord_trans(x-shift_x, y-shift_y,order="CH_to_normal")
+        return lons, lats
+    elif order =="normal_to_CH":
+        x_trans, y_trans=coord_trans(x, y, order= "normal_to_CH")
+        return x_trans+shift_x, y_trans+shift_y
+        
 
 def perform_PCA(dataloader, img_enc, device="cuda", file_name="pca_model", n_components=None, n_sample=None):
     """load with pca_model = joblib.load('pca_model.pkl')"""
@@ -329,3 +356,40 @@ def do_and_plot_PCA(model, data_path,pca_file_name,nbr_components=None, nbr_plot
 def plot_PCA(pca_model_path,nbr_plots,pos_encoder,country_name="Switzerland",save_path=None):
     for i in range(nbr_plots):
         plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=pos_encoder,pca_model_path=pca_model_path, grid_resolution=0.01, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path)
+
+
+def NCEAS_covariates(lon, lat, directory="embeddings_data_and_dictionaries/data_SDM_NCEAS/Environnement"):
+    """
+    Fetch raster values for given lon/lat coordinates from all .tif files in a directory.
+    
+    Parameters:
+        lon (array-like): Longitudes
+        lat (array-like): Latitudes
+        directory (str or Path): Path to folder containing .tif raster files
+    
+    Returns:
+        dict: Keys are raster filenames (without extension), values are arrays of sampled values
+    """
+    directory = Path(directory)
+    
+    # Transform coordinates
+    x, y = coord_trans_shift(lon, lat, order="normal_to_CH")
+    points = np.column_stack([x, y])  # shape (n_points, 2)
+    
+    # Get all .tif files
+    tif_files = sorted(directory.glob("*.tif"))
+    
+    if len(tif_files) == 0:
+        print("No TIFF files found in directory:", directory)
+        return {}
+    
+    # Dictionary to hold values from all rasters
+    all_values = {}
+    
+    for tif_path in tif_files:
+        with rasterio.open(tif_path) as src:
+            # Sample raster at given points
+            values = np.array([v[0] for v in src.sample(points)])
+            all_values[tif_path.stem] = values  # use filename without extension as key
+    
+    return all_values

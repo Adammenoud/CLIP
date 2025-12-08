@@ -8,7 +8,8 @@ import os
 import json
 from datetime import datetime
 from torchinfo import summary
-
+import utils
+import numpy as np
 
 def get_resnet(dim_emb, device="cuda"):
     model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1) #can also set weights to None
@@ -95,7 +96,7 @@ class Fourier_MLP(nn.Module): #fourrier encoding followed by 2 layer MLP
         self.hidden_dim=hidden_dim
         self.output_dim=output_dim
         self.MLP=CustomMLP(fourier_dim, hidden_dim, output_dim)
-
+        self.fourier_enc=Fourier_enc(fourier_dim)
         
 
     def forward(self, coord):
@@ -103,14 +104,18 @@ class Fourier_MLP(nn.Module): #fourrier encoding followed by 2 layer MLP
         x=self.MLP(x)
         return x
             
-
-    def fourier_enc(self, x, scales=None):
+class Fourier_enc(nn.Module):
+    def __init__(self, encoding_dim, device="cuda"):
+        super(Fourier_enc, self).__init__()
+        self.encoding_dim=encoding_dim
+        self.device=device
+    def forward(self, x, scales=None):
         # x: (batch_size, 2)
         batch_size, input_dim = x.shape
         # Default scales if not provided
         if scales is None:
             # Half of fourier_dim for sin, half for cos
-            scales = torch.arange(self.fourier_dim // (2 * input_dim), dtype=torch.float32).to(self.device)
+            scales = torch.arange(self.encoding_dim // (2 * input_dim), dtype=torch.float32).to(self.device)
         # Expand x to shape (batch_size, input_dim, 1)
         x_expanded = x.unsqueeze(-1)  # (batch_size, input_dim, 1)
         # Compute scaled inputs: (batch_size, input_dim, num_scales)
@@ -120,9 +125,42 @@ class Fourier_MLP(nn.Module): #fourrier encoding followed by 2 layer MLP
         cos_enc = torch.cos(scaled)
         # Concatenate sin and cos along last dimension
         encoded = torch.cat([sin_enc, cos_enc], dim=-1)  # (batch_size, input_dim, num_scales*2)
-        # Flatten last two dimensions to get final shape: (batch_size, fourier_dim)
+         # Flatten last two dimensions to get final shape: (batch_size, fourier_dim)
         encoded = encoded.view(batch_size, -1)
         return encoded
+
+class Cov_Fourier_MLP(nn.Module):
+    def __init__(self, fourier_dim, hidden_dim, output_dim,covariate_dim,scales=None, device="cuda"): #fourrier_dim must be a multiple of 2*originaldim
+        '''The scales range from 1 to 2**-(fourrier_dim/4) if not specified'''
+        super(Cov_Fourier_MLP, self).__init__()
+
+        self.fourier_enc=Fourier_enc(fourier_dim)
+        self.MLP=CustomMLP(fourier_dim+covariate_dim, hidden_dim, output_dim)
+        self.scales=scales
+        self.device=device
+
+    def forward(self, coords , covariates=None):
+        ''' covariates: (batch_size, covariate_dim)
+            coords:     (batch_size, 2)             '''
+        if covariates is None:
+            print(coords)
+            coords_numpy=coords.cpu().numpy()
+            covariates_dict=utils.NCEAS_covariates(coords_numpy[:,0], coords_numpy[:,1])
+            keys = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"] #it is a bit ugly but it keeps the order, if needed
+            cov_np = np.stack([covariates_dict[k] for k in keys], axis=1)  # (batch, num_covariates)
+            covariates = torch.from_numpy(cov_np).float().to(self.device)
+        print(covariates)
+
+
+        x=self.fourier_enc(coords, self.scales)
+        x=torch.cat((x, covariates), dim=1) #(batch_size, covariate_dim+fourier_dim)
+        x= self.MLP(x)
+        return x
+        
+
+
+
+
 
 class RFF_MLPs(nn.Module):
     '''as in geoCLIP, RFF encodding, '''
@@ -284,8 +322,8 @@ def train(doublenetwork,
             config_path = os.path.join(save_name, "hyperparameters.json")
             with open(config_path, "w") as f:
                 json.dump(hparams, f, indent=4)
-            summary_str = str(summary(doublenetwork, input_size=[images.shape, labels.shape])) #txt
-            with open(os.path.join(save_name, "model_summary.txt"), "w") as f:
+            summary_str = str(summary(doublenetwork, input_size=[images.shape, labels.shape],verbose=0 )) #txt
+            with open(os.path.join(save_name, "model_summary.txt"), "w", encoding="utf-8") as f:
                 f.write(summary_str)
         if save_name is not None and nbr_checkppoints is not None and ep % (epochs//nbr_checkppoints)==0 and ep!= 0:
             checkpoint_name = f"{save_name}_checkpoint_{current_checkpoint}"
