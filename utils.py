@@ -158,7 +158,6 @@ def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,
     _ , dataloader=dataloader_emb(data_file_name,batch_size=nbr_samples,shuffle=True,sort_duplicates=sort_duplicates, dictionary=dictionary) #test set
     doublenetwork.eval()
 
-    results = []
     data_iter = iter(dataloader)  # manual iterator
     all_sim_values = []
     all_asim_values = []
@@ -229,7 +228,7 @@ def coord_trans(x, y, order="CH_to_normal"):
     return x_out, y_out
 
 def coord_trans_shift(x,y, order="CH_to_normal"):
-    "converts from the NCEAS dataset coordinates to regular lat, lon (and vice versa)"
+    "converts from the NCEAS dataset coordinates (they have a shift) to regular lat, lon (and vice versa)"
     shift_x, shift_y= (1011627.4909483634, -100326.1477937577) #See "coordinates.ipynb"
     if order=="CH_to_normal":
         lons, lats = coord_trans(x-shift_x, y-shift_y,order="CH_to_normal")
@@ -339,7 +338,7 @@ def create_country_grid(country_name, grid_resolution=0.1):
     coords_inside= torch.tensor(coords_inside, dtype=torch.float32)
     return coords_inside #returns a torch tensor
 
-def do_and_plot_PCA(model, data_path,pca_file_name,nbr_components=None, nbr_plots=3, batch_size=4064, sort_duplicates=False,dictionary=None,country_name="Switzerland",save_path=None):
+def do_and_plot_PCA(model, data_path,pca_file_name,nbr_components=None, nbr_plots=3, batch_size=4064, sort_duplicates=False,dictionary=None,country_name="Switzerland",save_path_pic=None):
 
     if not hasattr(model, "img_encoder"): #compatibility issues
         img_encoder = nn.Sequential(model.lin1,model.relu,model.lin2)
@@ -351,7 +350,7 @@ def do_and_plot_PCA(model, data_path,pca_file_name,nbr_components=None, nbr_plot
 
     pca_model_path=f"PCA_models/{pca_file_name}.pkl"
     for i in range(nbr_plots):
-        plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=model.pos_encoder,pca_model_path=pca_model_path, grid_resolution=0.01, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path)
+        plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=model.pos_encoder,pca_model_path=pca_model_path, grid_resolution=0.01, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path_pic)
 
 def plot_PCA(pca_model_path,nbr_plots,pos_encoder,country_name="Switzerland",save_path=None):
     for i in range(nbr_plots):
@@ -393,3 +392,19 @@ def NCEAS_covariates(lon, lat, directory="embeddings_data_and_dictionaries/data_
             all_values[tif_path.stem] = values  # use filename without extension as key
     
     return all_values
+
+def print_model(model_path):
+    ckpt = torch.load(model_path, map_location="cpu")
+    if isinstance(ckpt, dict) and "state_dict" in ckpt:
+        state_dict = ckpt["state_dict"]
+    else:
+        state_dict = ckpt  # assume raw state_dict
+    print("\n=== Keys in state_dict ===")
+    for k in state_dict.keys():
+        print(k)
+    print("\n=== Shapes of tensors ===")
+    for k, v in state_dict.items():
+        if torch.is_tensor(v):
+            print(f"{k:40s}: {tuple(v.shape)}")
+        else:
+            print(f"{k:40s}: NON-TENSOR ({type(v)})")

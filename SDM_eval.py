@@ -94,7 +94,8 @@ def train_models(
         n_pca_components=None,
         hidden_size=[256, 256],
         covariates = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"],
-        po_data_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItrain_po.csv"
+        po_data_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItrain_po.csv",
+        epochs=200
 
 ):
     
@@ -132,14 +133,18 @@ def train_models(
 
     PR_emb=fit_multi_GLM(X_emb,y)
     PR_cov =fit_multi_GLM(X_cov,y)
+    PR_both=fit_multi_GLM(np.concatenate([X_emb,X_cov],axis=1),y)
 
     MLP_emb=MLP(in_dim=X_emb.shape[1], hidden=hidden_size, out_dim=30)
-    MLP_emb = train_one_MLP(MLP_emb, X_emb, y)
+    MLP_emb = train_one_MLP(MLP_emb, X_emb, y,epochs=epochs)
 
     MLP_cov=MLP(in_dim=len(covariates), hidden=hidden_size, out_dim=30)
-    MLP_cov = train_one_MLP(MLP_cov, X_cov, y)
+    MLP_cov = train_one_MLP(MLP_cov, X_cov, y,epochs=epochs)
 
-    return PR_emb, PR_cov, MLP_emb, MLP_cov, scaler_cov, scaler_emb, pca if do_pca else None
+    MLP_both=MLP(in_dim=X_emb.shape[1]+len(covariates), hidden=hidden_size, out_dim=30)
+    MLP_both = train_one_MLP(MLP_both, np.concatenate([X_emb,X_cov],axis=1), y,epochs=epochs)
+
+    return PR_emb, PR_cov, PR_both, MLP_emb, MLP_cov, MLP_both, scaler_cov, scaler_emb, pca if do_pca else None
 
 def evaluate_models(
     pos_encoder, 
@@ -147,8 +152,10 @@ def evaluate_models(
     scaler_emb, 
     PR_cov, #from fit_multi_GLM
     PR_emb, #from fit_multi_GLM
+    PR_both, #from fit_multi_GLM
     MLP_cov, #from train_one_MLP : shape (n_samples, n_species)
     MLP_emb,  #from train_one_MLP
+    MLP_both,  #from train_one_MLP
     pca_model=None, #to lower dim of X_test_emb.
     covariates = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"],
     pa_csv_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItest_pa.csv",
@@ -159,7 +166,7 @@ def evaluate_models(
     'swi21','swi22','swi23','swi24','swi25','swi26','swi27','swi28','swi29','swi30']
 ):
     """
-    Runs preprocessing, model prediction and AUC evaluation on PA data
+    Evaluation on PA data
     """
     pa_data=pd.read_csv(pa_csv_path)
     env=pd.read_csv(env_csv_path)
@@ -180,13 +187,17 @@ def evaluate_models(
     output_shape=y_true.shape
     y_pred_cov=np.zeros(output_shape)
     y_pred_emb=np.zeros(output_shape)
+    y_pred_both=np.zeros(output_shape)
     y_pred_cov_MLP=np.zeros(output_shape)
     y_pred_emb_MLP=np.zeros(output_shape)
+    y_pred_both_MLP=np.zeros(output_shape)
     for i in range(output_shape[1]):
         y_pred_cov[:,i]=PR_cov[i].predict(X_test_cov)
         y_pred_emb[:,i]=PR_emb[i].predict(X_test_emb)
+        y_pred_both[:,i]=PR_both[i].predict(np.concatenate([X_test_emb,X_test_cov],axis=1))
     y_pred_cov_MLP=MLP_cov(torch.from_numpy(X_test_cov).float()).detach().numpy().squeeze()
     y_pred_emb_MLP=MLP_emb(torch.from_numpy(X_test_emb).float()).detach().numpy().squeeze()
+    y_pred_both_MLP=MLP_both(torch.from_numpy(np.concatenate([X_test_emb,X_test_cov],axis=1)).float()).detach().numpy().squeeze()
 
 
 
@@ -195,11 +206,15 @@ def evaluate_models(
     print("AUC cov PR:", auc_cov_PR)
     auc_emb_PR = roc_auc_score(y_true, y_pred_emb)
     print("AUC emb PR:", auc_emb_PR)
+    auc_both_PR = roc_auc_score(y_true, y_pred_both)
+    print("AUC both PR:", auc_both_PR)
 
     auc_cov_MLP = roc_auc_score(y_true, y_pred_cov_MLP)
     print("AUC cov MLP:", auc_cov_MLP)
     auc_emb_MLP = roc_auc_score(y_true, y_pred_emb_MLP)
     print("AUC emb MLP:", auc_emb_MLP)
+    auc_both_MLP = roc_auc_score(y_true, y_pred_both_MLP)
+    print("AUC both MLP:", auc_both_MLP)
     return {
     "auc_cov_PR": auc_cov_PR,
     "auc_emb_PR": auc_emb_PR,
@@ -247,5 +262,5 @@ if __name__ == "__main__":
         MLP_cov, #from train_one_MLP : shape (n_samples, n_species)
         MLP_emb,  #from train_one_MLP
         pca_model=None, #to lower dim of X_test_emb.
-        )   
+        ) 
 

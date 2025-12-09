@@ -129,34 +129,8 @@ class Fourier_enc(nn.Module):
         encoded = encoded.view(batch_size, -1)
         return encoded
 
-class Cov_Fourier_MLP(nn.Module):
-    def __init__(self, fourier_dim, hidden_dim, output_dim,covariate_dim,scales=None, device="cuda"): #fourrier_dim must be a multiple of 2*originaldim
-        '''The scales range from 1 to 2**-(fourrier_dim/4) if not specified'''
-        super(Cov_Fourier_MLP, self).__init__()
-
-        self.fourier_enc=Fourier_enc(fourier_dim)
-        self.MLP=CustomMLP(fourier_dim+covariate_dim, hidden_dim, output_dim)
-        self.scales=scales
-        self.device=device
-
-    def forward(self, coords , covariates=None):
-        ''' covariates: (batch_size, covariate_dim)
-            coords:     (batch_size, 2)             '''
-        if covariates is None:
-            print(coords)
-            coords_numpy=coords.cpu().numpy()
-            covariates_dict=utils.NCEAS_covariates(coords_numpy[:,0], coords_numpy[:,1])
-            keys = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"] #it is a bit ugly but it keeps the order, if needed
-            cov_np = np.stack([covariates_dict[k] for k in keys], axis=1)  # (batch, num_covariates)
-            covariates = torch.from_numpy(cov_np).float().to(self.device)
-        print(covariates)
 
 
-        x=self.fourier_enc(coords, self.scales)
-        x=torch.cat((x, covariates), dim=1) #(batch_size, covariate_dim+fourier_dim)
-        x= self.MLP(x)
-        return x
-        
 
 
 
@@ -264,7 +238,32 @@ class DoubleNetwork_V2(nn.Module):
     
 
 
+class Cov_Fourier_MLP(nn.Module):
+    def __init__(self, fourier_dim, hidden_dim, output_dim,covariate_dim,scales=None, device="cuda"): #fourrier_dim must be a multiple of 2*originaldim
+        '''The scales range from 1 to 2**-(fourrier_dim/4) if not specified'''
+        super(Cov_Fourier_MLP, self).__init__()
 
+        self.fourier_enc=Fourier_enc(fourier_dim)
+        self.MLP=CustomMLP(fourier_dim+covariate_dim, hidden_dim, output_dim)
+        self.scales=scales
+        self.device=device
+
+    def forward(self, coords , covariates=None):
+        ''' covariates: (batch_size, covariate_dim)
+            coords:     (batch_size, 2)             '''
+        if covariates is None:
+            coords_numpy=coords.cpu().numpy()
+            covariates_dict=utils.NCEAS_covariates(coords_numpy[:,1], coords_numpy[:,0]) #lon, lat
+            keys = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"] #it is ugly code but it keeps the order, if needed
+            cov_np = np.stack([covariates_dict[k] for k in keys], axis=1)  # (batch, num_covariates)
+            covariates = torch.from_numpy(cov_np).float().to(self.device)
+
+
+
+        x=self.fourier_enc(coords, self.scales)
+        x=torch.cat((x, covariates), dim=1) #(batch_size, covariate_dim+fourier_dim)
+        x= self.MLP(x)
+        return x
                           
 
 def train(doublenetwork,
@@ -294,15 +293,25 @@ def train(doublenetwork,
         for i, (images, labels,_) in enumerate(pbar):
             images = images.to(device)
             labels = labels.to(device)
+            ################################ covariates
+            # coords_numpy=labels.cpu().numpy()
+            # covariates_dict=utils.NCEAS_covariates(coords_numpy[:,0], coords_numpy[:,1])
+            # keys = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"] #it is ugly code but it keeps the order, if needed
+            # cov_np = np.stack([covariates_dict[k] for k in keys], axis=1)  # (batch, num_covariates)
+            # covariates = torch.from_numpy(cov_np).float().to(device)
+            #torch.clip(covariates, min=-10000, max=10000, out=covariates) #clipping to avoid extreme values
+
+            ###########
             logits=doublenetwork(images,labels) #logits of cosine similarities
             loss=CE_loss(logits,device=device)
-
+            
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             pbar.set_postfix(CE=loss.item())
             writer.add_scalar("Cross-entropy", loss.item(), global_step=ep * l + i)
+        
     ################################# logs and savings
         if ep % saving_frequency == 0 and (save_name is not None):
             os.makedirs(save_name, exist_ok=True)
@@ -322,9 +331,9 @@ def train(doublenetwork,
             config_path = os.path.join(save_name, "hyperparameters.json")
             with open(config_path, "w") as f:
                 json.dump(hparams, f, indent=4)
-            summary_str = str(summary(doublenetwork, input_size=[images.shape, labels.shape],verbose=0 )) #txt
-            with open(os.path.join(save_name, "model_summary.txt"), "w", encoding="utf-8") as f:
-                f.write(summary_str)
+            # summary_str = str(summary(doublenetwork, input_size=[images.shape, labels.shape],verbose=0 )) #txt
+            # with open(os.path.join(save_name, "model_summary.txt"), "w", encoding="utf-8") as f:
+            #     f.write(summary_str)
         if save_name is not None and nbr_checkppoints is not None and ep % (epochs//nbr_checkppoints)==0 and ep!= 0:
             checkpoint_name = f"{save_name}_checkpoint_{current_checkpoint}"
             os.makedirs(checkpoint_name, exist_ok=True)

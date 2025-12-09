@@ -27,14 +27,14 @@ from geoclip import LocationEncoder
 np.random.seed(48)
 torch.manual_seed(48)
 #--------------------------------------------------------------------------------------
-nbr_epochs=100
+nbr_epochs=120
 device="cuda"
 batch_size=4096#4096 previoulsy #"We use batch size |B| as 512 when training on full dataset. For data-efficient settings with 20%, 10%, and 5% of the data, we use |B| as 256, 256, and 128 respectively"
-save_name="geoclip_pos_enc_and_2_512_layers"
-data_path="embeddings_data_and_dictionaries/bioCLIP_full_dataset_embeddings.h5"
+save_name="switzerland_with_covariate_Cov_Fourier_MLP"
+data_path="embeddings_data_and_dictionaries/Embeddings/swiss_bioclip_embeddings/swiss_data_bioclip.h5"
+
+
 #Fetching data
-
-
 '''
 print("making dictionary")
 path_multimedia="/home/adam/source/CLIP/data_plantnet_obsevations/multimedia.txt"
@@ -42,10 +42,10 @@ path_occurences="/home/adam/source/CLIP/data_plantnet_obsevations/occurrence.txt
 dictionary=data_extraction.get_dictionary(30000, path_occurences, path_multimedia,extra_occ_columns=['scientificName'])#3167066 rows
 dictionary.to_csv("test_30000_data_dictionary")
 '''
+#"embeddings_data_and_dictionaries/Embeddings/swiss_bioclip_embeddings/swiss_dictionary"
 
-
-dictionary=pd.read_csv("embeddings_data_and_dictionaries/data_dictionary_sciName")
-
+dictionary=pd.read_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/data_dictionary_sciName")
+print(len(dictionary))
 '''
 print("downloading embeddings")
 #make embeddings
@@ -98,17 +98,11 @@ model=utils.train(
 #tensorboard --logdir=runs
 device="cuda"
 data_path="embeddings_data_and_dictionaries/bioCLIP_full_dataset_embeddings.h5"
-dim_fourier_encoding=512 #multiple of 4!!
-dim_hidden=1024
-dim_emb=512 #this one is actually shared with img embeddings
-
-geoclip_pos_encoder = LocationEncoder() #embeds into 512
-pos_encoder = geoclip_pos_encoder = nn.Sequential(
-    LocationEncoder(),
-    nn.Linear(512, 512),
-    nn.ReLU(),
-    nn.Linear(512, 512)
-)
+fourier_dim=64
+covariate_dim=13
+hidden_dim=256
+dim_emb=128
+pos_encoder = nn_classes.Cov_Fourier_MLP(fourier_dim=fourier_dim, hidden_dim=hidden_dim, output_dim=dim_emb,covariate_dim=covariate_dim,scales=None)
 
 #pos_encoder= nn_classes.RFF_MLPs(original_dim=2, fourier_dim=dim_fourier_encoding, hidden_dim=dim_hidden, output_dim=dim_emb,M=8,sigma_min=2,sigma_max=256, number_layers=4)
 #pos_encoder=utils.RFF_MLPs( original_dim=2, fourier_dim=dim_fourier_encoding, hidden_dim=dim_hidden, output_dim=512,M=8,sigma_min=1,sigma_max=256).to(device)
@@ -128,7 +122,7 @@ model=nn_classes.train(
             device="cuda",
             save_name=save_name,
             saving_frequency=1,
-            nbr_checkppoints=20,   ########
+            nbr_checkppoints=30,   ########
             test_dataloader=test_dataloader,
             test_frequency=1,
             nbr_tests=10
