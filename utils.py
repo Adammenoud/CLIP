@@ -19,6 +19,7 @@ from shapely.geometry import Point
 from shapely import geometry as geom
 import regionmask
 import rasterio
+import open_clip
 import pandas as pd
 
 
@@ -94,8 +95,8 @@ def dataloader_emb(file_path,batch_size,shuffle=False,train_proportion=0.8): #fr
     return train_loader, test_loader
     '''
 
-def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=False, dictionary=None): #from a h5 file
-    '''solves to the duplication problem'''
+def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=False, dictionary=None,drop_last=True): #from a h5 file
+    '''solves to the duplication problem, but need to take a dictionary with gbifID column.'''
 
     dataset=data_extraction.HDF5Dataset(file_path)
     train_size = int(train_ratio * len(dataset))
@@ -107,8 +108,8 @@ def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_dupl
     else:
         train_dataset, test_dataset = random_split(dataset, [train_size, test_size],generator=generator)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle,drop_last=drop_last)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle,drop_last=drop_last)
     return train_loader, test_loader
 def group_split(dataset, file_path, dictionary,generator, train_ratio=0.8):
     """Split dataset into train/test SUCH THAT samples with the same ID stay together.
@@ -169,10 +170,11 @@ def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,
             # reinitialize iterator if dataset is smaller than nbr_iter
             data_iter = iter(dataloader)
             batch = next(data_iter)
-        emb_vectors, coord , _ = batch
+        emb_vectors, coord , idx = batch
         emb_vectors = emb_vectors.to(device)
         coord = coord.to(device)
-        logits=doublenetwork(emb_vectors,coord)
+        idx=idx = idx.numpy().reshape(-1).tolist()
+        logits=doublenetwork(emb_vectors,coord, idx)
 
         logits=logits/doublenetwork.logit_scale.exp()
         #get values
@@ -338,19 +340,36 @@ def create_country_grid(country_name, grid_resolution=0.1):
     coords_inside= torch.tensor(coords_inside, dtype=torch.float32)
     return coords_inside #returns a torch tensor
 
+
+
+def get_encoders(model): #returns the position encoder and image encoder from the model, depending on the name
+    if hasattr(model, "pos_encoder"):
+        pos_encoder=model.pos_encoder
+    elif hasattr(model, "location_encoder"):
+        pos_encoder=model.location_encoder
+    else:
+        raise ValueError("do_and_plot_PCA: model does not have a recognized position encoder attribute")
+    if hasattr(model, "lin1") and hasattr(model, "relu") and hasattr(model, "lin2"):
+        img_encoder = nn.Sequential(model.lin1,model.relu,model.lin2)
+    elif hasattr(model, "img_encoder"):
+        img_encoder=model.img_encoder
+    elif hasattr(model, "image_encoder"):
+        img_encoder=model.image_encoder
+    else:
+        raise ValueError("do_and_plot_PCA: model does not have a recognized image encoder attribute")
+    return pos_encoder, img_encoder
+
 def do_and_plot_PCA(model, data_path,pca_file_name,nbr_components=None, nbr_plots=3, batch_size=4064, sort_duplicates=False,dictionary=None,country_name="Switzerland",save_path_pic=None):
 
-    if not hasattr(model, "img_encoder"): #compatibility issues
-        img_encoder = nn.Sequential(model.lin1,model.relu,model.lin2)
-    else:
-        img_encoder=model.image_encoder
+    img_encoder, pos_encoder=get_encoders(model)
 
     dataloader, _ =dataloader_emb(data_path,batch_size=batch_size, shuffle=True,train_ratio=0.8, sort_duplicates=sort_duplicates, dictionary=dictionary)
     perform_PCA(dataloader, img_enc=img_encoder, device="cuda", file_name=pca_file_name, n_components=nbr_components, n_sample=None)
 
     pca_model_path=f"PCA_models/{pca_file_name}.pkl"
+    
     for i in range(nbr_plots):
-        plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=model.pos_encoder,pca_model_path=pca_model_path, grid_resolution=0.01, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path_pic)
+        plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=pos_encoder,pca_model_path=pca_model_path, grid_resolution=0.01, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path_pic)
 
 def plot_PCA(pca_model_path,nbr_plots,pos_encoder,country_name="Switzerland",save_path=None):
     for i in range(nbr_plots):
@@ -408,3 +427,68 @@ def print_model(model_path):
             print(f"{k:40s}: {tuple(v.shape)}")
         else:
             print(f"{k:40s}: NON-TENSOR ({type(v)})")
+
+
+def get_gbif_covariates(dictionary, idx_list, covariate_list=['scientificName']):
+    '''looks into the dictionary to get the data corespondint to the indices.
+        the covariates must be columns in the dictionary.
+        retrun: (len(idx_list), len(covariate_list)) array
+    '''
+    # Ensure all requested covariates exist in the DataFrame
+    missing_cols = [col for col in covariate_list if col not in dictionary.columns]
+    if missing_cols:
+        raise ValueError(f"The following covariates are missing in the DataFrame: {missing_cols}")
+    # Select rows and columns, convert to numpy array
+    selected_data = dictionary.loc[idx_list, covariate_list].to_numpy()
+    return selected_data
+
+
+def apply_pos_enc(coords, pos_encoder,pca_model_path=None,comp_idx=None):
+    return pos_encoder(coords).cpu()
+
+
+def map_image(doublenetwork, path_to_image, country="Switzerland", device="cuda", grid_resolution=0.1, save_path=None):
+    """Given a batch of images and coordinates, returns the image embeddings and position embeddings."""
+    image = Image.open(path_to_image).convert("RGB")
+    bioclip, preprocess_train, processor = open_clip.create_model_and_transforms('hf-hub:imageomics/bioclip-2')
+    image= processor(image).unsqueeze(0).to(device)
+    bioclip = bioclip.to(device)
+    bioclip.eval()
+    emb_img = bioclip.encode_image(image)
+    coords= create_country_grid(country, grid_resolution=grid_resolution).to(device)
+    coords = torch.flip(coords, dims=[1])
+
+    values=doublenetwork(emb_img,coords) #broadcast?
+    coords=torch.flip(coords, dims=[1]) #so that north is up
+    print("sims shape:", values.shape)
+    countries = regionmask.defined_regions.natural_earth_v5_0_0.countries_10
+    idx = list(countries.names).index(country)
+    polygon = countries.polygons[idx]
+    if country=="France":
+        # Natural Earth polygons are MultiPolygon objects
+        parts = list(polygon.geoms)
+
+        # Metropolitan France lies roughly between lon -5 to 10 and lat 42 to 52
+        bbox_metro = geom.box(minx=-10, miny=40, maxx=15, maxy=55)
+
+        # Keep only polygons that intersect this box
+        metro_parts = [p for p in parts if p.intersects(bbox_metro)]
+        if len(metro_parts) == 0:
+            raise RuntimeError("Could not isolate metropolitan France polygon.")
+
+        polygon = geom.MultiPolygon(metro_parts)
+    boundary = gpd.GeoSeries([polygon])
+
+    coords=coords.cpu().numpy()
+    values=values.cpu().detach().numpy()
+    fig, ax = plt.subplots(figsize=(8, 10))
+    boundary.plot(ax=ax, color="none", edgecolor="black")
+    sc = ax.scatter(coords[:, 0], coords[:, 1], c=values, cmap='viridis', s=1, alpha=0.5)
+    plt.colorbar(sc, ax=ax, label="Value")
+    ax.set_title(f"Image similarity over {country}")
+    if save_path is None:
+        plt.show()
+    else:
+        plt.savefig(save_path)
+    
+   

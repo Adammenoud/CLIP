@@ -21,7 +21,8 @@ import hdf5
 import torch
 from geoclip import LocationEncoder
 
-
+# import heartrate
+# heartrate.trace(browser=False, port=9999)
 
 #seed
 np.random.seed(48)
@@ -30,29 +31,28 @@ torch.manual_seed(48)
 nbr_epochs=120
 device="cuda"
 batch_size=4096#4096 previoulsy #"We use batch size |B| as 512 when training on full dataset. For data-efficient settings with 20%, 10%, and 5% of the data, we use |B| as 256, 256, and 128 respectively"
-save_name="switzerland_with_covariate_Cov_Fourier_MLP"
-data_path="embeddings_data_and_dictionaries/Embeddings/swiss_bioclip_embeddings/swiss_data_bioclip.h5"
+save_name="covariates_only_on_CH_fourrier_MLP"
+data_path="embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioCLIP_full_dataset_embeddings.h5"
 
 
 #Fetching data
 '''
 print("making dictionary")
-path_multimedia="/home/adam/source/CLIP/data_plantnet_obsevations/multimedia.txt"
-path_occurences="/home/adam/source/CLIP/data_plantnet_obsevations/occurrence.txt"
-dictionary=data_extraction.get_dictionary(30000, path_occurences, path_multimedia,extra_occ_columns=['scientificName'])#3167066 rows
-dictionary.to_csv("test_30000_data_dictionary")
+path_occurences="embeddings_data_and_dictionaries/data_plantnet_obsevations/occurrence.txt" 
+path_multimedia="embeddings_data_and_dictionaries/data_plantnet_obsevations/multimedia.txt"
+dictionary=data_extraction.get_dictionary(3167066, path_occurences, path_multimedia,extra_occ_columns=['scientificName','countryCode'])#3167066 rows
+dictionary.to_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioclip_data_dictionary_sciName_countrycode")
 '''
-#"embeddings_data_and_dictionaries/Embeddings/swiss_bioclip_embeddings/swiss_dictionary"
 
-dictionary=pd.read_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/data_dictionary_sciName")
-print(len(dictionary))
+#"embeddings_data_and_dictionaries/Embeddings/swiss_bioclip_embeddings/swiss_dictionary"
+dictionary=pd.read_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioclip_data_dictionary_sciName_countrycode")
+
 '''
 print("downloading embeddings")
 #make embeddings
 data_extraction.download_emb(dictionary, dim_emb=768, output_dir="downloaded_embeddings_Switwerland")
 print("download finished")
 '''
-
 #I got 3167055 embeddings: 11 failed,for instance:
 #Failed to download https://bs.plantnet.org/image/o/f20e1710cd58e9cc0f5816351719600476293e5b
 #Failed to download https://bs.plantnet.org/image/o/21b326f1faf2216108193b5305bb05828ee4551d
@@ -95,14 +95,15 @@ model=utils.train(
             )
             '''
 
-#tensorboard --logdir=runs
-device="cuda"
-data_path="embeddings_data_and_dictionaries/bioCLIP_full_dataset_embeddings.h5"
-fourier_dim=64
-covariate_dim=13
-hidden_dim=256
+# #tensorboard --logdir=runs
+# device="cuda"
+# data_path="embeddings_data_and_dictionaries/bioCLIP_full_dataset_embeddings.h5"
+# fourier_dim=64
+# covariate_dim=13
+# hidden_dim=256
 dim_emb=128
-pos_encoder = nn_classes.Cov_Fourier_MLP(fourier_dim=fourier_dim, hidden_dim=hidden_dim, output_dim=dim_emb,covariate_dim=covariate_dim,scales=None)
+# pos_encoder = nn_classes.Cov_Fourier_MLP(fourier_dim=fourier_dim, hidden_dim=hidden_dim, output_dim=dim_emb,covariate_dim=covariate_dim,scales=None)
+pos_encoder=nn_classes.Cov_Fourier_MLP(fourier_dim=64, hidden_dim=256, output_dim=dim_emb,covariate_dim=13,dictionary=dictionary)
 
 #pos_encoder= nn_classes.RFF_MLPs(original_dim=2, fourier_dim=dim_fourier_encoding, hidden_dim=dim_hidden, output_dim=dim_emb,M=8,sigma_min=2,sigma_max=256, number_layers=4)
 #pos_encoder=utils.RFF_MLPs( original_dim=2, fourier_dim=dim_fourier_encoding, hidden_dim=dim_hidden, output_dim=512,M=8,sigma_min=1,sigma_max=256).to(device)
@@ -118,7 +119,7 @@ model=nn_classes.train(
             nbr_epochs,
             dataloader,
             batch_size,
-            lr=1e-4,
+            lr=1e-4,    
             device="cuda",
             save_name=save_name,
             saving_frequency=1,

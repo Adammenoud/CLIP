@@ -222,13 +222,13 @@ class DoubleNetwork_V2(nn.Module):
         return x
 
 
-    def forward(self, image, coordinates): #takes a batch of images and their labels
+    def forward(self, image, coordinates, idx=None): #takes a batch of images and their labels
         '''returns the normalized pos/image similarity matrix'''
         x = self.lin1(image)
         x = self.relu(x)
         image_emb = self.lin2(x) #see geoCLIP paper
         
-        pos_emb=self.pos_encoder(coordinates)
+        pos_emb=self.pos_encoder(coordinates, idx)
         
         image_emb = image_emb / image_emb.norm(dim=1, keepdim=True)
         pos_emb = pos_emb / pos_emb.norm(dim=1, keepdim=True)
@@ -239,7 +239,7 @@ class DoubleNetwork_V2(nn.Module):
 
 
 class Cov_Fourier_MLP(nn.Module):
-    def __init__(self, fourier_dim, hidden_dim, output_dim,covariate_dim,scales=None, device="cuda"): #fourrier_dim must be a multiple of 2*originaldim
+    def __init__(self, fourier_dim, hidden_dim, output_dim,covariate_dim,scales=None, device="cuda",dictionary=None): #fourrier_dim must be a multiple of 2*originaldim
         '''The scales range from 1 to 2**-(fourrier_dim/4) if not specified'''
         super(Cov_Fourier_MLP, self).__init__()
 
@@ -247,18 +247,60 @@ class Cov_Fourier_MLP(nn.Module):
         self.MLP=CustomMLP(fourier_dim+covariate_dim, hidden_dim, output_dim)
         self.scales=scales
         self.device=device
+        self.dictionary=dictionary
 
-    def forward(self, coords , covariates=None):
+    def forward(self, coords , idx_list=None, covariates=None, ):
         ''' covariates: (batch_size, covariate_dim)
             coords:     (batch_size, 2)             '''
+        # if covariates is None:
+        #     countries=utils.get_gbif_covariates(self.dictionary, idx_list, covariate_list=['countryCode'])
+        #     is_in_CH=(countries=="CH")
+
+        #     coords_numpy=coords.cpu().numpy()
+        #     covariates_dict=utils.NCEAS_covariates(coords_numpy[:,1], coords_numpy[:,0]) #lon, lat
+        #     keys = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"] #it is ugly code but it keeps the order, if needed
+        #     cov_np = np.stack([covariates_dict[k] for k in keys], axis=1)  # (batch, num_covariates)
+        #     covariates = torch.from_numpy(cov_np).float().to(self.device)
+        #     covariates = torch.zeros(covariates.shape).to(self.device) #testing without covariates
+        #     covariates = torch.normal(covariates, 1).to(self.device) #testing with random covariates
         if covariates is None:
-            coords_numpy=coords.cpu().numpy()
-            covariates_dict=utils.NCEAS_covariates(coords_numpy[:,1], coords_numpy[:,0]) #lon, lat
-            keys = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"] #it is ugly code but it keeps the order, if needed
-            cov_np = np.stack([covariates_dict[k] for k in keys], axis=1)  # (batch, num_covariates)
-            covariates = torch.from_numpy(cov_np).float().to(self.device)
+            # 1. Determine which indices are in CH
+            if idx_list is  not None:
+                countries = utils.get_gbif_covariates(
+                    self.dictionary, idx_list, covariate_list=['countryCode']
+                )
+                is_in_CH = (countries == "CH")
+                is_in_CH_t = torch.from_numpy(is_in_CH).squeeze(1).to(self.device)  # (batch,)
+            else:
+                is_in_CH_t = np.array([True] * coords.shape[0])  # Default to all True if idx_list is None: assume all in CH
+            
 
-
+            # 2. Number of covariates
+            keys = ["bcc","calc","ccc","ddeg","nutri","pday","precyy",
+                    "sfroyy","slope","sradyy","swb","tavecc","topo"]
+            num_cov = len(keys)
+            batch_size = coords.shape[0]
+            # 3. Initialize random covariates for everyone
+            # covariates = torch.normal(
+            #     mean=0.0,
+            #     std=1.0,
+            #     size=(batch_size, num_cov),
+            #     device=self.device)
+            covariates = torch.zeros(
+                batch_size, num_cov, device=self.device
+                )
+            # 4. Compute real covariates ONLY for CH points
+            if is_in_CH_t.any():
+                coords_numpy = coords[is_in_CH_t].cpu().numpy()
+                covariates_dict = utils.NCEAS_covariates(
+                    coords_numpy[:, 1], coords_numpy[:, 0]  # lon, lat
+                    )
+                cov_np_CH = np.stack(
+                    [covariates_dict[k] for k in keys], axis=1
+                )
+                cov_CH = torch.from_numpy(cov_np_CH).float().to(self.device)
+                # 5. Overwrite random values with real covariates for CH rows
+                covariates[is_in_CH_t] = cov_CH
 
         x=self.fourier_enc(coords, self.scales)
         x=torch.cat((x, covariates), dim=1) #(batch_size, covariate_dim+fourier_dim)
@@ -290,19 +332,13 @@ def train(doublenetwork,
     #### training loop
     for ep in range(epochs):
         pbar = tqdm(dataloader)
-        for i, (images, labels,_) in enumerate(pbar):
+        for i, (images, labels,idx) in enumerate(pbar):
             images = images.to(device)
             labels = labels.to(device)
-            ################################ covariates
-            # coords_numpy=labels.cpu().numpy()
-            # covariates_dict=utils.NCEAS_covariates(coords_numpy[:,0], coords_numpy[:,1])
-            # keys = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"] #it is ugly code but it keeps the order, if needed
-            # cov_np = np.stack([covariates_dict[k] for k in keys], axis=1)  # (batch, num_covariates)
-            # covariates = torch.from_numpy(cov_np).float().to(device)
-            #torch.clip(covariates, min=-10000, max=10000, out=covariates) #clipping to avoid extreme values
+            idx=idx = idx.numpy().reshape(-1).tolist()
 
-            ###########
-            logits=doublenetwork(images,labels) #logits of cosine similarities
+            #also change idx on test loop
+            logits=doublenetwork(images,labels,idx) #logits of cosine similarities
             loss=CE_loss(logits,device=device)
             
             optimizer.zero_grad()
@@ -345,11 +381,12 @@ def train(doublenetwork,
             with torch.no_grad():
                 total_loss = 0.0
                 for _ in range(nbr_tests):
-                    test_images, test_labels, _ = next(iter(test_dataloader))
+                    test_images, test_labels, idx = next(iter(test_dataloader))
                     test_images = test_images.to(device)
                     test_labels = test_labels.to(device)
+                    idx=idx = idx.numpy().reshape(-1).tolist()
 
-                    test_logits = doublenetwork(test_images, test_labels)
+                    test_logits = doublenetwork(test_images, test_labels, idx)
                     test_loss = CE_loss(test_logits, device=device)
                     total_loss += test_loss.item()
 

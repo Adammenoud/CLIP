@@ -41,20 +41,19 @@ def get_dictionary(nbr_images, path_occurences, path_multimedia, extra_occ_colum
 #class	order	superfamily	family	subfamily	tribe	subtribe	genus	genericName	subgenus
 
 def download_imgs(dictionary, output_dir="downloaded_images/all_images"):
-    '''Mid the name under which images are registered: 
-            {idx}_{row['gbifID']}.jpg
-            '''
-    # Create folder for images
-    os.makedirs(output_dir,exist_ok=True)
+    """
+    Mind the name under which images are registered: 
+    {idx}_{row['gbifID']}.jpg
+    """
+    os.makedirs(output_dir, exist_ok=True)
 
-    # Loop over rows
-    for idx, row in dictionary.iterrows():
+    # Wrap iterrows with tqdm
+    for idx, row in tqdm(dictionary.iterrows(), total=len(dictionary), desc="Downloading images"):
         url = row['identifier']
         if pd.notna(url):
             response = requests.get(url)
             if response.status_code == 200:
-                # Save as idx_gbifID.jpg
-                file_path = f"{output_dir}/{idx}_{row['gbifID']}.jpg" #careful: there will be gaps in idx if the data is filtered (indices will not be from 0 to nbr_images-1)
+                file_path = f"{output_dir}/{idx}_{row['gbifID']}.jpg"
                 with open(file_path, 'wb') as f:
                     f.write(response.content)
             else:

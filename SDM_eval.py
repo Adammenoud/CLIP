@@ -95,8 +95,8 @@ def train_models(
         hidden_size=[256, 256],
         covariates = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"],
         po_data_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItrain_po.csv",
-        epochs=200
-
+        epochs=200,
+        train_MLP=True
 ):
     
 
@@ -134,15 +134,19 @@ def train_models(
     PR_emb=fit_multi_GLM(X_emb,y)
     PR_cov =fit_multi_GLM(X_cov,y)
     PR_both=fit_multi_GLM(np.concatenate([X_emb,X_cov],axis=1),y)
+    if train_MLP:
+        MLP_emb=MLP(in_dim=X_emb.shape[1], hidden=hidden_size, out_dim=30)
+        MLP_emb = train_one_MLP(MLP_emb, X_emb, y,epochs=epochs)
 
-    MLP_emb=MLP(in_dim=X_emb.shape[1], hidden=hidden_size, out_dim=30)
-    MLP_emb = train_one_MLP(MLP_emb, X_emb, y,epochs=epochs)
+        MLP_cov=MLP(in_dim=len(covariates), hidden=hidden_size, out_dim=30)
+        MLP_cov = train_one_MLP(MLP_cov, X_cov, y,epochs=epochs)
 
-    MLP_cov=MLP(in_dim=len(covariates), hidden=hidden_size, out_dim=30)
-    MLP_cov = train_one_MLP(MLP_cov, X_cov, y,epochs=epochs)
-
-    MLP_both=MLP(in_dim=X_emb.shape[1]+len(covariates), hidden=hidden_size, out_dim=30)
-    MLP_both = train_one_MLP(MLP_both, np.concatenate([X_emb,X_cov],axis=1), y,epochs=epochs)
+        MLP_both=MLP(in_dim=X_emb.shape[1]+len(covariates), hidden=hidden_size, out_dim=30)
+        MLP_both = train_one_MLP(MLP_both, np.concatenate([X_emb,X_cov],axis=1), y,epochs=epochs)
+    else:
+        MLP_emb=None
+        MLP_cov=None
+        MLP_both=None
 
     return PR_emb, PR_cov, PR_both, MLP_emb, MLP_cov, MLP_both, scaler_cov, scaler_emb, pca if do_pca else None
 
@@ -163,7 +167,8 @@ def evaluate_models(
     species_columns=[
     'swi01','swi02','swi03','swi04','swi05','swi06','swi07','swi08','swi09','swi10',
     'swi11','swi12','swi13','swi14','swi15','swi16','swi17','swi18','swi19','swi20',
-    'swi21','swi22','swi23','swi24','swi25','swi26','swi27','swi28','swi29','swi30']
+    'swi21','swi22','swi23','swi24','swi25','swi26','swi27','swi28','swi29','swi30'],
+    train_MLP=True
 ):
     """
     Evaluation on PA data
@@ -195,11 +200,15 @@ def evaluate_models(
         y_pred_cov[:,i]=PR_cov[i].predict(X_test_cov)
         y_pred_emb[:,i]=PR_emb[i].predict(X_test_emb)
         y_pred_both[:,i]=PR_both[i].predict(np.concatenate([X_test_emb,X_test_cov],axis=1))
-    y_pred_cov_MLP=MLP_cov(torch.from_numpy(X_test_cov).float()).detach().numpy().squeeze()
-    y_pred_emb_MLP=MLP_emb(torch.from_numpy(X_test_emb).float()).detach().numpy().squeeze()
-    y_pred_both_MLP=MLP_both(torch.from_numpy(np.concatenate([X_test_emb,X_test_cov],axis=1)).float()).detach().numpy().squeeze()
+    if train_MLP:
+        y_pred_cov_MLP=MLP_cov(torch.from_numpy(X_test_cov).float()).detach().numpy().squeeze()
+        y_pred_emb_MLP=MLP_emb(torch.from_numpy(X_test_emb).float()).detach().numpy().squeeze()
+        y_pred_both_MLP=MLP_both(torch.from_numpy(np.concatenate([X_test_emb,X_test_cov],axis=1)).float()).detach().numpy().squeeze()
 
 
+    #importances, importance_df= permutation_importance_multi(PR_cov, X_test_cov, y_true, feature_names=None, n_repeats=30, random_state=0)
+    # print("importance:",importance_df)
+    # print("importance mean:",importance_df.mean(axis=1))
 
     print(y_true.shape, y_pred_cov.shape)
     auc_cov_PR = roc_auc_score(y_true, y_pred_cov)
@@ -264,3 +273,39 @@ if __name__ == "__main__":
         pca_model=None, #to lower dim of X_test_emb.
         ) 
 
+
+
+import numpy as np
+import pandas as pd
+from sklearn.inspection import permutation_importance
+
+def permutation_importance_multi(PR_list, X, y, feature_names=None, n_repeats=30, random_state=0):
+ 
+    n_models = len(PR_list)
+    n_features = X.shape[1]
+    
+    # If feature names not provided
+    if feature_names is None:
+        feature_names = [f"X{i}" for i in range(n_features)]
+    
+    importances = np.zeros((n_features, n_models, n_repeats))
+    
+    # Compute importance for each model
+    for model_idx, model in enumerate(PR_list):
+        result = permutation_importance(
+            model, 
+            X, 
+            y[:, model_idx],
+            n_repeats=n_repeats,
+            random_state=random_state
+        )
+        importances[:, model_idx, :] = result.importances
+    
+    # Mean importance across repeats (axis=2)
+    mean_importance = importances.mean(axis=2)
+    
+    # Build a DataFrame
+    col_names = [f"y{j}" for j in range(n_models)]
+    mean_importance_df = pd.DataFrame(mean_importance, index=feature_names, columns=col_names)
+    
+    return importances, mean_importance_df
