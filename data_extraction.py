@@ -191,3 +191,17 @@ class HDF5Dataset(Dataset):
         )
 
 
+class dictionary_data(Dataset):
+    def __init__(self, dictionary, covariate_list):
+        self.dictionary = dictionary
+        self.covariates_list = covariate_list
+
+        self.length = len(dictionary)
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        # open file once per worker
+
+        return self.dictionary.iloc[idx, self.covariate_list].to_numpy()

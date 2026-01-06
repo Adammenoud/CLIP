@@ -10,6 +10,10 @@ from datetime import datetime
 from torchinfo import summary
 import utils
 import numpy as np
+from geoclip import LocationEncoder
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+import open_clip
 
 def get_resnet(dim_emb, device="cuda"):
     model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1) #can also set weights to None
@@ -17,6 +21,17 @@ def get_resnet(dim_emb, device="cuda"):
     model.fc = nn.Linear(num_features, dim_emb) 
     model = model.to(device)
     return model  
+
+class LocationEncoderAdapter(torch.nn.Module):
+    '''Just so it also takes idx in the forward'''
+    def __init__(self, encoder: torch.nn.Module):
+        super().__init__()
+        self.encoder = encoder
+
+    def forward(self, coordinates, idx=None):
+        return self.encoder(coordinates)
+
+
 
 def CE_loss(logits, device="cuda"):
     '''logits of size (n, n), containing the cosine similarities (n would be batch size for CLIP)'''
@@ -36,6 +51,21 @@ def CE_loss(logits, device="cuda"):
     
     return loss
 
+class MLP(nn.Module):
+    def __init__(self, in_dim, hidden=[256, 256], out_dim=30):
+        super().__init__()
+        layers = []
+        prev = in_dim
+        for h in hidden:
+            layers.append(nn.Linear(prev, h))
+            layers.append(nn.ReLU())
+            prev = h
+        layers.append(nn.Linear(prev, out_dim))  # linear output
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        x=self.net(x)
+        return x
 
 class CustomMLP(nn.Module): #to encoode location (obsolete)
     def __init__(self, input_dim, hidden_dim, output_dim):
@@ -99,7 +129,7 @@ class Fourier_MLP(nn.Module): #fourrier encoding followed by 2 layer MLP
         self.fourier_enc=Fourier_enc(fourier_dim)
         
 
-    def forward(self, coord):
+    def forward(self, coord, idx=None):
         x=self.fourier_enc(coord,self.scales)
         x=self.MLP(x)
         return x
@@ -110,6 +140,7 @@ class Fourier_enc(nn.Module):
         self.encoding_dim=encoding_dim
         self.device=device
     def forward(self, x, scales=None):
+        x=x*2*torch.pi/360
         # x: (batch_size, 2)
         batch_size, input_dim = x.shape
         # Default scales if not provided
@@ -119,7 +150,7 @@ class Fourier_enc(nn.Module):
         # Expand x to shape (batch_size, input_dim, 1)
         x_expanded = x.unsqueeze(-1)  # (batch_size, input_dim, 1)
         # Compute scaled inputs: (batch_size, input_dim, num_scales)
-        scaled = x_expanded / (2.0 ** scales)  # broadcasting
+        scaled = x_expanded * (2.0 ** scales)  # broadcasting
         # Compute sine and cosine encodings
         sin_enc = torch.sin(scaled)
         cos_enc = torch.cos(scaled)
@@ -215,12 +246,6 @@ class DoubleNetwork_V2(nn.Module):
         self.relu = nn.ReLU()
         self.lin2 = nn.Linear(dim_hidden, dim_output)
 
-    def image_encode(self, x):
-        x = self.lin1(x)
-        x = self.relu(x)
-        x = self.lin2(x)
-        return x
-
 
     def forward(self, image, coordinates, idx=None): #takes a batch of images and their labels
         '''returns the normalized pos/image similarity matrix'''
@@ -228,7 +253,7 @@ class DoubleNetwork_V2(nn.Module):
         x = self.relu(x)
         image_emb = self.lin2(x) #see geoCLIP paper
         
-        pos_emb=self.pos_encoder(coordinates, idx)
+        pos_emb=self.pos_encoder(coordinates)    #, idx)
         
         image_emb = image_emb / image_emb.norm(dim=1, keepdim=True)
         pos_emb = pos_emb / pos_emb.norm(dim=1, keepdim=True)
@@ -307,95 +332,13 @@ class Cov_Fourier_MLP(nn.Module):
         x= self.MLP(x)
         return x
                           
-
-def train(doublenetwork,
-          epochs,
-          dataloader,
-          batch_size,
-          lr=1e-4,
-          device="cuda",
-          save_name=None,
-          saving_frequency=1,
-          nbr_checkppoints=None, 
-          test_dataloader=None,
-          test_frequency=1,
-          nbr_tests=10
-          ):
-    '''nbr_chepoints < epochs, please'''
-    #### initialization
-    doublenetwork = doublenetwork.to(device)
-    doublenetwork.train()
-    writer =  SummaryWriter(log_dir=os.path.join("runs", f"{save_name}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"))
-    optimizer=torch.optim.AdamW(doublenetwork.parameters(),lr=lr)
-    l = len(dataloader)
-    current_checkpoint=1
-    #### training loop
-    for ep in range(epochs):
-        pbar = tqdm(dataloader)
-        for i, (images, labels,idx) in enumerate(pbar):
-            images = images.to(device)
-            labels = labels.to(device)
-            idx=idx = idx.numpy().reshape(-1).tolist()
-
-            #also change idx on test loop
-            logits=doublenetwork(images,labels,idx) #logits of cosine similarities
-            loss=CE_loss(logits,device=device)
-            
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            pbar.set_postfix(CE=loss.item())
-            writer.add_scalar("Cross-entropy", loss.item(), global_step=ep * l + i)
-        
-    ################################# logs and savings
-        if ep % saving_frequency == 0 and (save_name is not None):
-            os.makedirs(save_name, exist_ok=True)
-            torch.save(doublenetwork.state_dict(), os.path.join(save_name, f"model.pt")) #overwrites the same file, so to avoid getting floded by saves
-            torch.save(optimizer.state_dict(), os.path.join(save_name, f"optim.pt"))
-            hparams = {                             #json
-                    "save_name" : save_name,
-                    "saving_frequency" : saving_frequency,
-                    "learning_rate": lr,
-                    "batch_size": batch_size,
-                    "epochs": epochs,
-                    "current epoch (if stopped)" : ep,
-                    "saving_frequency":saving_frequency,
-                    "nbr_checkppoints":nbr_checkppoints, 
-                    "test_frequency":test_frequency,
-                    "nbr_tests": nbr_tests}
-            config_path = os.path.join(save_name, "hyperparameters.json")
-            with open(config_path, "w") as f:
-                json.dump(hparams, f, indent=4)
-            # summary_str = str(summary(doublenetwork, input_size=[images.shape, labels.shape],verbose=0 )) #txt
-            # with open(os.path.join(save_name, "model_summary.txt"), "w", encoding="utf-8") as f:
-            #     f.write(summary_str)
-        if save_name is not None and nbr_checkppoints is not None and ep % (epochs//nbr_checkppoints)==0 and ep!= 0:
-            checkpoint_name = f"{save_name}_checkpoint_{current_checkpoint}"
-            os.makedirs(checkpoint_name, exist_ok=True)
-            torch.save(doublenetwork.state_dict(), os.path.join(checkpoint_name, f"model.pt")) #overwrites the same file, so to avoid getting floded by saves
-            torch.save(optimizer.state_dict(), os.path.join(checkpoint_name, f"optim.pt"))
-            current_checkpoint +=1
-        if test_dataloader is not None and ep % test_frequency == 0:
-            doublenetwork.eval()
-            with torch.no_grad():
-                total_loss = 0.0
-                for _ in range(nbr_tests):
-                    test_images, test_labels, idx = next(iter(test_dataloader))
-                    test_images = test_images.to(device)
-                    test_labels = test_labels.to(device)
-                    idx=idx = idx.numpy().reshape(-1).tolist()
-
-                    test_logits = doublenetwork(test_images, test_labels, idx)
-                    test_loss = CE_loss(test_logits, device=device)
-                    total_loss += test_loss.item()
-
-                avg_loss = total_loss / nbr_tests
-                writer.add_scalar("CE on test set", avg_loss, global_step=ep)
-
-        doublenetwork.train()
-    #######################
-
-    doublenetwork.eval()
-    writer.close()
-    return doublenetwork
+class GeneralCrossEntropyLoss(nn.Module):
+    """
+    For 2 general probability distributions (in torch's CrossEntropy, one on them is assumed to be deterministic, i.e. just a label)
+    """
+    def __init__(self):
+        super().__init__()
+    def forward(self, logits, target):
+        log_probs = torch.nn.functional.log_softmax(logits, dim=1)
+        loss = -(target * log_probs).sum(dim=1).mean()
+        return loss

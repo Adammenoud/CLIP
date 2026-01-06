@@ -16,6 +16,7 @@ from pathlib import Path
 from sklearn.preprocessing import StandardScaler
 import geopandas as gpd
 from shapely.geometry import Point
+from shapely.geometry import MultiPolygon
 from shapely import geometry as geom
 import regionmask
 import rasterio
@@ -163,6 +164,7 @@ def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,
     all_sim_values = []
     all_asim_values = []
 
+
     for _ in tqdm(range(nbr_iter), desc="Computing similarities"):
         try:
             batch = next(data_iter)
@@ -239,6 +241,7 @@ def coord_trans_shift(x,y, order="CH_to_normal"):
         x_trans, y_trans=coord_trans(x, y, order= "normal_to_CH")
         return x_trans+shift_x, y_trans+shift_y
         
+    
 
 def perform_PCA(dataloader, img_enc, device="cuda", file_name="pca_model", n_components=None, n_sample=None):
     """load with pca_model = joblib.load('pca_model.pkl')"""
@@ -273,37 +276,19 @@ def coord_to_PCA(coords, pos_enc,pca_model_path, comp_idx=1):
 def plot_country_values(country_name, fct_to_plot,pos_encoder,pca_model_path="PCA_All_comp_full_dataset_Normalized.pkl", grid_resolution=0.1, cmap='viridis',device="cuda",comp_idx=0,save_path=None):
     coords = create_country_grid(country_name, grid_resolution)
     values = fct_to_plot(coords.to(device), pos_encoder,pca_model_path,comp_idx=comp_idx)#np.array([coord_trans(coord) for coord in coords])
-
     # Get the country polygon
     countries = regionmask.defined_regions.natural_earth_v5_0_0.countries_10
     idx = list(countries.names).index(country_name)
     polygon = countries.polygons[idx]
     if country_name=="France":
-        # Natural Earth polygons are MultiPolygon objects
-        parts = list(polygon.geoms)
-
-        # Metropolitan France lies roughly between lon -5 to 10 and lat 42 to 52
-        bbox_metro = geom.box(minx=-10, miny=40, maxx=15, maxy=55)
-
-        # Keep only polygons that intersect this box
-        metro_parts = [p for p in parts if p.intersects(bbox_metro)]
-        if len(metro_parts) == 0:
-            raise RuntimeError("Could not isolate metropolitan France polygon.")
-
-        polygon = geom.MultiPolygon(metro_parts)
+        polygon=filter_France(polygon)
     boundary = gpd.GeoSeries([polygon])
-
-    fig, ax = plt.subplots(figsize=(8, 10))
-    boundary.plot(ax=ax, color="none", edgecolor="black")
-    sc = ax.scatter(coords[:, 0], coords[:, 1], c=values, cmap=cmap, s=20)
-    plt.colorbar(sc, ax=ax, label="Value")
-    ax.set_title(f"Values over {country_name}")
-    if save_path is None:
-        plt.show()
-    else:
-        plt.savefig(save_path)
+    plot_values(coords,values,boundary,save_path,country_name)
 
 def create_country_grid(country_name, grid_resolution=0.1):
+    '''Returns the coordinates of points inside the country. 
+        return size: (nbr_points,2) with order lat, lon for the 2nd dimension
+    '''
     # Load 110m Natural Earth countries
     countries = regionmask.defined_regions.natural_earth_v5_0_0.countries_10
     # Find the index of the country
@@ -314,19 +299,7 @@ def create_country_grid(country_name, grid_resolution=0.1):
 
     polygon = countries.polygons[idx]
     if country_name=="France":
-        # Natural Earth polygons are MultiPolygon objects
-        parts = list(polygon.geoms)
-
-        # Metropolitan France lies roughly between lon -5 to 10 and lat 42 to 52
-        bbox_metro = geom.box(minx=-10, miny=40, maxx=15, maxy=55)
-
-        # Keep only polygons that intersect this box
-        metro_parts = [p for p in parts if p.intersects(bbox_metro)]
-
-        if len(metro_parts) == 0:
-            raise RuntimeError("Could not isolate metropolitan France polygon.")
-
-        polygon = geom.MultiPolygon(metro_parts)
+        polygon=filter_France(polygon)
     # Create a lon/lat grid covering the bounding box
     minx, miny, maxx, maxy = polygon.bounds
     lon_grid = np.arange(minx, maxx, grid_resolution)
@@ -340,6 +313,16 @@ def create_country_grid(country_name, grid_resolution=0.1):
     coords_inside= torch.tensor(coords_inside, dtype=torch.float32)
     return coords_inside #returns a torch tensor
 
+
+def filter_France(polygon):
+    parts = list(polygon.geoms)
+    bbox_metro = geom.box(minx=-10, miny=40, maxx=15, maxy=55)
+
+    metro_parts = [p for p in parts if p.intersects(bbox_metro)]
+    if not metro_parts:
+        raise RuntimeError("Could not isolate metropolitan France polygon.")
+
+    return MultiPolygon(metro_parts)
 
 
 def get_encoders(model): #returns the position encoder and image encoder from the model, depending on the name
@@ -361,7 +344,7 @@ def get_encoders(model): #returns the position encoder and image encoder from th
 
 def do_and_plot_PCA(model, data_path,pca_file_name,nbr_components=None, nbr_plots=3, batch_size=4064, sort_duplicates=False,dictionary=None,country_name="Switzerland",save_path_pic=None):
 
-    img_encoder, pos_encoder=get_encoders(model)
+    pos_encoder, img_encoder=get_encoders(model)
 
     dataloader, _ =dataloader_emb(data_path,batch_size=batch_size, shuffle=True,train_ratio=0.8, sort_duplicates=sort_duplicates, dictionary=dictionary)
     perform_PCA(dataloader, img_enc=img_encoder, device="cuda", file_name=pca_file_name, n_components=nbr_components, n_sample=None)
@@ -376,7 +359,7 @@ def plot_PCA(pca_model_path,nbr_plots,pos_encoder,country_name="Switzerland",sav
         plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=pos_encoder,pca_model_path=pca_model_path, grid_resolution=0.01, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path)
 
 
-def NCEAS_covariates(lon, lat, directory="embeddings_data_and_dictionaries/data_SDM_NCEAS/Environnement"):
+def NCEAS_covariates(lon, lat, directory="embeddings_data_and_dictionaries/data_SDM_NCEAS/Environnement", return_dict=True):
     """
     Fetch raster values for given lon/lat coordinates from all .tif files in a directory.
     
@@ -385,13 +368,14 @@ def NCEAS_covariates(lon, lat, directory="embeddings_data_and_dictionaries/data_
         lat (array-like): Latitudes
         directory (str or Path): Path to folder containing .tif raster files
     
-    Returns:
+    Returns: either a dictionary or an np array, depending on the argumennt "return_dict"
         dict: Keys are raster filenames (without extension), values are arrays of sampled values
+        
     """
     directory = Path(directory)
     
     # Transform coordinates
-    x, y = coord_trans_shift(lon, lat, order="normal_to_CH")
+    x, y = coord_trans_shift(lon, lat, order="normal_to_CH") #error?
     points = np.column_stack([x, y])  # shape (n_points, 2)
     
     # Get all .tif files
@@ -410,7 +394,13 @@ def NCEAS_covariates(lon, lat, directory="embeddings_data_and_dictionaries/data_
             values = np.array([v[0] for v in src.sample(points)])
             all_values[tif_path.stem] = values  # use filename without extension as key
     
-    return all_values
+    if return_dict:
+        return all_values
+    else:
+        # Stack values into a 2D array: shape (num_points, num_rasters)
+        # Order of columns matches tif_files
+        array_values = np.column_stack([all_values[tif_path.stem] for tif_path in tif_files])
+        return array_values
 
 def print_model(model_path):
     ckpt = torch.load(model_path, map_location="cpu")
@@ -448,39 +438,46 @@ def apply_pos_enc(coords, pos_encoder,pca_model_path=None,comp_idx=None):
 
 
 def map_image(doublenetwork, path_to_image, country="Switzerland", device="cuda", grid_resolution=0.1, save_path=None):
-    """Given a batch of images and coordinates, returns the image embeddings and position embeddings."""
-    image = Image.open(path_to_image).convert("RGB")
+    '''
+    Plots the similarity score of each coordinate with the image.
+    If no save_path is given, uses plt.show()
+    '''
+    image=Image.open(path_to_image).convert("RGB")
+    emb_img = embedds_image(image)
+    map_embedding(doublenetwork, emb_img, country=country, device=device, grid_resolution=grid_resolution, save_path=save_path)
+    
+
+def embedds_image(image, device="cuda"):
+    '''Fetches the model every time: only for plots or exeptinal use, do not call repeatedly!'''
     bioclip, preprocess_train, processor = open_clip.create_model_and_transforms('hf-hub:imageomics/bioclip-2')
     image= processor(image).unsqueeze(0).to(device)
     bioclip = bioclip.to(device)
     bioclip.eval()
     emb_img = bioclip.encode_image(image)
+    return emb_img
+
+def map_embedding(doublenetwork, embedding, country="Switzerland", device="cuda", grid_resolution=0.1, save_path=None):
+    '''
+    Plots the similarity score of each coordinate with the image embedding.
+    If no save_path is given, uses plt.show()
+    '''
     coords= create_country_grid(country, grid_resolution=grid_resolution).to(device)
     coords = torch.flip(coords, dims=[1])
-
-    values=doublenetwork(emb_img,coords) #broadcast?
-    coords=torch.flip(coords, dims=[1]) #so that north is up
+    values=doublenetwork(embedding,coords)
+    coords=torch.flip(coords, dims=[1])
     print("sims shape:", values.shape)
     countries = regionmask.defined_regions.natural_earth_v5_0_0.countries_10
     idx = list(countries.names).index(country)
     polygon = countries.polygons[idx]
+    print(country)
     if country=="France":
-        # Natural Earth polygons are MultiPolygon objects
-        parts = list(polygon.geoms)
-
-        # Metropolitan France lies roughly between lon -5 to 10 and lat 42 to 52
-        bbox_metro = geom.box(minx=-10, miny=40, maxx=15, maxy=55)
-
-        # Keep only polygons that intersect this box
-        metro_parts = [p for p in parts if p.intersects(bbox_metro)]
-        if len(metro_parts) == 0:
-            raise RuntimeError("Could not isolate metropolitan France polygon.")
-
-        polygon = geom.MultiPolygon(metro_parts)
+        polygon=filter_France(polygon)
     boundary = gpd.GeoSeries([polygon])
+    plot_values(coords,values,boundary,save_path,country)
 
-    coords=coords.cpu().numpy()
-    values=values.cpu().detach().numpy()
+def plot_values(coords,values,boundary,save_path,country):
+    coords=to_numpy(coords)
+    values=to_numpy(values)
     fig, ax = plt.subplots(figsize=(8, 10))
     boundary.plot(ax=ax, color="none", edgecolor="black")
     sc = ax.scatter(coords[:, 0], coords[:, 1], c=values, cmap='viridis', s=1, alpha=0.5)
@@ -491,4 +488,124 @@ def map_image(doublenetwork, path_to_image, country="Switzerland", device="cuda"
     else:
         plt.savefig(save_path)
     
-   
+
+def to_numpy(x):
+    if isinstance(x, np.ndarray):
+        return x
+    if torch.is_tensor(x):
+        return x.detach().cpu().numpy()
+    raise TypeError(f"Unsupported type: {type(x)}")
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.stats import gaussian_kde
+from shapely.geometry import Point, Polygon
+import regionmask
+import torch
+
+def plot_species_density(df, species_name, country_name, grid_resolution=0.1, bandwidth=0.05,plot_points=True):
+    """
+    Plots the spatial density of a species over a specific country.
+
+    Parameters:
+        df (pd.DataFrame): Must contain 'scientificName', 'decimalLatitude', 'decimalLongitude'.
+        species_name (str): Name of the species to plot. Plots the whole dataset if None.
+        country_name (str): Name of the country.
+        grid_resolution (float): Resolution of the grid in degrees.
+        bandwidth (float): Bandwidth for Gaussian KDE.
+    """
+    # Filter for the species
+    if species_name is not None:
+        df_species = df[df['scientificName'] == species_name]
+        if df_species.empty:
+            raise ValueError(f"No records found for species '{species_name}'")
+    else: df_species=df
+    
+    # Get the country grid (coordinates inside country polygon)
+    country_coords = create_country_grid(country_name, grid_resolution=grid_resolution)
+    
+    # Convert torch tensor to numpy
+    country_coords_np = country_coords.numpy()
+    
+    # Filter observations inside the country
+    country_polygon = regionmask.defined_regions.natural_earth_v5_0_0.countries_10.polygons[
+        list(regionmask.defined_regions.natural_earth_v5_0_0.countries_10.names).index(country_name)
+    ]
+    
+    species_points = df_species[['decimalLongitude', 'decimalLatitude']].values
+    species_points_inside = np.array([pt for pt in species_points if country_polygon.contains(Point(pt))])
+    
+    if len(species_points_inside) == 0:
+        raise ValueError(f"No records for species '{species_name}' found inside {country_name}")
+    elif len(species_points_inside) == 1:
+        # Single-point fallback: constant zero density everywhere
+        density = np.zeros(len(country_coords_np))
+    else:
+        # KDE density estimation
+        kde = gaussian_kde(species_points_inside.T, bw_method=bandwidth)
+        density = kde(country_coords_np.T)
+    
+    # # Plot
+    # plt.figure(figsize=(8,6))
+    # plt.scatter(country_coords_np[:,0], country_coords_np[:,1], c=density, s=50, cmap='viridis')
+    # plt.colorbar(label='Density')
+    # if plot_points:
+    #     plt.scatter(species_points_inside[:,0], species_points_inside[:,1], c='red', s=2, alpha=0.5, label='Occurrences')
+    # plt.xlabel('Longitude')
+    # plt.ylabel('Latitude')
+    # plt.title(f"Spatial density of {species_name} in {country_name}")
+    # plt.legend()
+    # plt.show()
+    # Create a regular grid over the map
+    x_min, x_max = country_coords_np[:,0].min(), country_coords_np[:,0].max()
+    y_min, y_max = country_coords_np[:,1].min(), country_coords_np[:,1].max()
+    X, Y = np.meshgrid(np.linspace(x_min, x_max, 200),
+                    np.linspace(y_min, y_max, 200))
+    grid_coords = np.vstack([X.ravel(), Y.ravel()])
+
+    # Evaluate KDE on the grid
+    Z = kde(grid_coords).reshape(X.shape)
+
+    # Plot density as a smooth surface
+    plt.figure(figsize=(8,6))
+    plt.imshow(Z, origin='lower', aspect='auto',
+            extent=[x_min, x_max, y_min, y_max],
+            cmap='viridis')
+    plt.colorbar(label='Density')
+
+    # Optionally overlay points
+    if plot_points:
+        plt.scatter(species_points_inside[:,0], species_points_inside[:,1],
+                    c='red', s=2, alpha=0.5, label='Occurrences')
+
+    plt.xlabel('Longitude')
+    plt.ylabel('Latitude')
+    plt.title(f"Spatial density of {species_name} in {country_name}")
+    plt.legend()
+    plt.show()
+
+def get_species_emb(indices, dictionary, model,tokenizer, column_name="taxa_bioclip", device="cuda"):
+    '''
+    Takes in a np/torch array (n_batch,) of integers (indices).
+    Returns a (n_batch, d_encoding) of (bioCLIP) species_embeddings for the corresponding indices 
+    The column containing the name information has to be in the dictionary.
+
+    bioclip is used with: 
+    model, preprocess_train, processor = open_clip.create_model_and_transforms('hf-hub:imageomics/bioclip-2')
+    tokenizer = open_clip.get_tokenizer('hf-hub:imageomics/bioclip-2')
+    model = model.to(device)
+    model.eval()
+
+    then ¨
+    text_tokens = tokenizer([species_name])
+    with torch.no_grad():
+    text_embedding = model.encode_text(text_tokens)
+    '''
+    np_idx=to_numpy(indices)
+    species = dictionary[column_name].iloc[np_idx]
+    tokens= tokenizer(species).to(device)
+    with torch.no_grad():
+        embeddings = model.encode_text(tokens)
+    return embeddings
+

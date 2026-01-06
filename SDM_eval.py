@@ -79,7 +79,6 @@ def get_embeddings(df, pos_encoder, device="cuda"):
         np.column_stack([lats, lons]),
         dtype=torch.float32
     ).to(device)
-
     with torch.no_grad():
         emb = pos_encoder(coords).cpu().numpy()
 
@@ -168,7 +167,7 @@ def evaluate_models(
     'swi01','swi02','swi03','swi04','swi05','swi06','swi07','swi08','swi09','swi10',
     'swi11','swi12','swi13','swi14','swi15','swi16','swi17','swi18','swi19','swi20',
     'swi21','swi22','swi23','swi24','swi25','swi26','swi27','swi28','swi29','swi30'],
-    train_MLP=True
+    train_MLP=True,
 ):
     """
     Evaluation on PA data
