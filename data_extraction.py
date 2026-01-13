@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import torch
 from torch.utils.data import Dataset, DataLoader
 import open_clip
+import utils
 
 
 #data available at https://api.gbif.org/v1/occurrence/download/request/0015029-251025141854904.zip
@@ -94,8 +95,7 @@ def download_emb(dictionary, dim_emb,output_dir="downloaded_embeddings",device="
     file.close()
     '''
 
-
-def process_row(row, processor, model, device):
+def process_row(row, processor, model, device, dictionary=None, tokenizer=None):
     """Download image, compute embedding, return embedding and coordinates."""
     url = row['identifier']
     if pd.isna(url):
@@ -116,6 +116,8 @@ def process_row(row, processor, model, device):
             outputs = model.encode_image(image_tensor) #for bioCLIP (image encoder)
         cls_embedding = outputs.cpu().numpy()
         coordinates = np.array([[row['decimalLatitude'], row['decimalLongitude']]])
+        specie_emb= utils.get_species_emb(np.array([row.name]), dictionary, model,tokenizer, column_name="taxa_bioclip", device="cuda")
+        cls_embedding=cls_embedding - specie_emb.cpu().numpy()
         return cls_embedding, coordinates
     except Exception as e:
         print(f"Error processing {url}: {e}")
@@ -135,7 +137,7 @@ def download_emb(dictionary, dim_emb, output_dir="downloaded_embeddings", device
     model, preprocess_train, processor = open_clip.create_model_and_transforms('hf-hub:imageomics/bioclip-2')
     model = model.to(device)
     model.eval()
-    #tokenizer = open_clip.get_tokenizer('hf-hub:imageomics/bioclip-2')
+    tokenizer = open_clip.get_tokenizer('hf-hub:imageomics/bioclip-2')
     
     #to encode:
     #image_features = model.encode_image(image_tensor)
@@ -144,9 +146,8 @@ def download_emb(dictionary, dim_emb, output_dir="downloaded_embeddings", device
 
 
     # Parallel processing
-    results = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_idx = {executor.submit(process_row, row, processor, model, device): idx  #syntax: .submit(function, arg1, arg2, ...). Basically, an ashychronous "for" loop on idx, row that tracks the output of process_row, and index it on idx
+        future_to_idx = {executor.submit(process_row, row, processor, model, device, dictionary, tokenizer): idx  #syntax: .submit(function, arg1, arg2, ...). Basically, an ashychronous "for" loop on idx, row that tracks the output of process_row, and index it on idx
                          for idx, row in dictionary.iterrows()}
 
         for future in tqdm(as_completed(future_to_idx), total=dictionary.shape[0], desc="Downloading embeddings"):
@@ -154,11 +155,11 @@ def download_emb(dictionary, dim_emb, output_dir="downloaded_embeddings", device
             idx = future_to_idx[future]  # original DataFrame index
             if res is not None:
                 cls_embedding, coordinates = res
+
                 hdf5.append_HDF5(vectors_to_add=cls_embedding, label_to_add=coordinates, file=file,
                                  data_name="vectors", label_name="coordinates", dict_idx=[idx])
 
     file.close()
-
 
 class HDF5Dataset(Dataset):
     def __init__(self, file_path, data_name="vectors", label_name="coordinates"):
@@ -205,3 +206,37 @@ class dictionary_data(Dataset):
         # open file once per worker
 
         return self.dictionary.iloc[idx, self.covariate_list].to_numpy()
+    
+
+def get_species_emb(dictionary, output_dir, batch_size=4096):
+    bioclip, preprocess_train, processor = open_clip.create_model_and_transforms('hf-hub:imageomics/bioclip-2')
+    tokenizer = open_clip.get_tokenizer('hf-hub:imageomics/bioclip-2')
+    bioclip = bioclip.to("cuda")
+    bioclip.eval()
+
+    hdf5.create_HDF5_file(vector_length=768, name=output_dir)
+    file = hdf5.open_HDF5(output_dir + ".h5")
+
+    indices = dictionary.index.tolist()
+
+    for start in tqdm(range(0, len(indices), batch_size), desc="Processing batches"):
+        batch_indices = indices[start:start + batch_size]
+        batch_df = dictionary.loc[batch_indices]
+
+        coordinates = batch_df[['decimalLatitude', 'decimalLongitude']].to_numpy()
+        vectors_to_add = utils.get_species_emb(np.array(batch_indices), dictionary, bioclip, tokenizer)
+        
+        # If torch tensors, convert to numpy
+        if hasattr(vectors_to_add, "cpu"):
+            vectors_to_add = vectors_to_add.cpu().numpy()
+
+        hdf5.append_HDF5(
+            vectors_to_add=vectors_to_add,
+            label_to_add=coordinates,
+            file=file,
+            data_name="vectors",
+            label_name="coordinates",
+            dict_idx=np.array(batch_indices).reshape(-1, 1)
+        )
+
+    file.close()

@@ -7,13 +7,16 @@ import os
 import json
 from datetime import datetime
 from torchinfo import summary
-import utils
 import numpy as np
 from geoclip import LocationEncoder
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 import open_clip
+import warnings
+
+import utils
 import nn_classes
+
 
 def train(doublenetwork,
           epochs,
@@ -27,7 +30,7 @@ def train(doublenetwork,
           test_dataloader=None,
           test_frequency=1,
           nbr_tests=10,
-          modalities=["images","coords"], #either "images","coords","NCEAS" or "species"
+          modalities=["images","coords"], #either "images","coords","NCEAS" or "species". Has to be compatible with the model's forward
           dictionary=None,  #if want to use a different dictionary in the "species" case
           covariate_names= ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"]
           ):
@@ -40,6 +43,14 @@ def train(doublenetwork,
     l = len(dataloader)
     current_checkpoint=1
     save_name="Model_saves/"+save_name #
+    if test_dataloader is not None:#warning if test_dataloader too small
+        n_available_batches=len(test_dataloader)
+        if n_available_batches < nbr_tests:
+            warnings.warn(
+                f"Requested nbr_tests={nbr_tests}, "
+                f"but test_dataloader only provides {n_available_batches} batches. "
+                f"Running only {n_available_batches} tests.",
+                RuntimeWarning,)
     # adjustments for other modalities than images, coords
     tokenizer, scaler, bioclip= prepare_modality_tools(modalities)
     if dictionary==None:
@@ -51,7 +62,6 @@ def train(doublenetwork,
             images = images.to(device)
             coords = coords.to(device)
                 
-            idx=idx.numpy().reshape(-1).tolist()
             modality_list= get_modalities(modalities, images, coords, idx, covariate_names, dictionary, scaler, bioclip, tokenizer, device="cuda")
 
             #also change idx on test loop
@@ -104,7 +114,6 @@ def train(doublenetwork,
                         break
                     test_images = test_images.to(device)
                     test_coords = test_coords.to(device)
-                    test_idx = test_idx.numpy().reshape(-1).tolist()
                     test_modality_list= get_modalities(modalities, test_images, test_coords, test_idx, covariate_names, dictionary, scaler, bioclip, tokenizer, device="cuda")
 
                     test_logits = doublenetwork(test_modality_list[0], test_modality_list[1]) 
@@ -128,10 +137,13 @@ def train(doublenetwork,
 
 
 def get_modalities(modality_names, images, coords, idx, covariate_names, dictionary, scaler, bioclip, tokenizer, device="cuda"):
+    '''
+    Coords order: [latitude, longitude]
+    '''
     #sanity checks:
     if len(modality_names) != 2:
         raise ValueError(f"Expected exactly 2 modalities, got {len(modality_names)}: {modality_names}")
-    allowed_modalities = ["images", "coords", "NCEAS", "specie"]
+    allowed_modalities = ["images", "coords", "NCEAS", "species"]
     invalid_mods = [m for m in modality_names if m not in allowed_modalities]
     if invalid_mods:
         raise ValueError(f"Invalid modality names: {invalid_mods}. Allowed: {allowed_modalities}")
@@ -144,11 +156,12 @@ def get_modalities(modality_names, images, coords, idx, covariate_names, diction
         results["coords"] = coords
     if "NCEAS" in modality_names: # gets covariates instead of coordinates
         coords=coords.cpu().detach().numpy()
-        NCEAS_covariates=utils.NCEAS_covariates(coords[:,0],coords[:,1], return_dict=True)
+        NCEAS_covariates=utils.NCEAS_covariates(coords[:,1],coords[:,0], return_dict=True) #this function take lon, lat
         NCEAS_covariates = np.column_stack([NCEAS_covariates[cov] for cov in covariate_names])  #keeps the right order for scaling
         NCEAS_covariates=scaler.transform(NCEAS_covariates)
         results["NCEAS"] = torch.tensor(NCEAS_covariates).to(device)
     if "species" in modality_names:
+        idx=idx.squeeze()
         results["species"]=utils.get_species_emb(idx,dictionary,bioclip,tokenizer)
 
     return [results[mod] for mod in modality_names]

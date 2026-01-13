@@ -53,6 +53,8 @@ def train_one_MLP(model, X, y, epochs=200, batch_size=250, lr=1e-4):
             optim.step()
     model=model.cpu()
     return model
+
+
 class deepmaxent_loss(nn.Module):
     def __init__(self):
         super(deepmaxent_loss, self).__init__()
@@ -70,48 +72,124 @@ def fit_multi_GLM(X,y):
     return PR_list
 
 
-def get_embeddings(df, pos_encoder, device="cuda"):
-    '''Takes a df with columns "x" and "y" in Swiss coordinates and returns the positional embeddings from the pos_encoder'''
-
-    shift_x, shift_y= (1011627.4909483634, -100326.1477937577) #See "coordinates.ipynb"
-    lons, lats = utils.coord_trans(df["x"].values-shift_x, df["y"].values-shift_y,order="CH_to_normal")
-    coords = torch.tensor(
-        np.column_stack([lats, lons]),
-        dtype=torch.float32
-    ).to(device)
+def get_embeddings(coords, pos_encoder, device="cuda"):
+    '''encodes with the pos_encoder. 
+    The model should expect the order of coords to be (lat, lon)
+    '''
+    coords = torch.tensor(coords, dtype=torch.float32).to(device) 
     with torch.no_grad():
         emb = pos_encoder(coords).cpu().numpy()
-
     return emb
 
-def fourier_enc(x, scales=None,fourier_dim=64):
-    pass
-#Class Fourier_enc from nn_models
+def get_data_NCEAS(po_data_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItrain_po.csv", 
+                   pa_csv_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItest_pa.csv", 
+                   env_csv_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItest_env.csv",
+                   species_columns=[
+                                    'swi01','swi02','swi03','swi04','swi05','swi06','swi07','swi08','swi09','swi10',
+                                    'swi11','swi12','swi13','swi14','swi15','swi16','swi17','swi18','swi19','swi20',
+                                    'swi21','swi22','swi23','swi24','swi25','swi26','swi27','swi28','swi29','swi30'],
+                   covariates = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"]
+                   ):
+
+    '''
+    Return the folowing np arrays: 
+    return shape:
+        X_cov, (n_po_samples, n_covariates)
+        y,  (n_po_samples, n_species)
+        X_test_cov, (n_pa_samples, n_covariates)
+        y_true (n_pa_samples, n_species)
+        coords (n_po_samples,2)
+
+        coordinate order is lat, lon !! (what models take as input)
+    '''
+    
+    po_data=pd.read_csv(po_data_path)
+    pa_data=pd.read_csv(pa_csv_path)
+    env=pd.read_csv(env_csv_path)
+
+    y_test = pa_data.loc[:, species_columns]
+    X_test_cov = env.loc[:,covariates]
+
+
+    y = pd.get_dummies(po_data["spid"])
+    po_data = pd.concat([po_data.drop(columns=["spid"]), y], axis=1) #For the full one-hot-encoded dataframe
+
+    po_covariates=po_data.loc[:,covariates]
+
+    X_cov=po_covariates.to_numpy()
+    y=y.to_numpy()
+    X_test_cov=X_test_cov.to_numpy()
+    y_test=y_test.to_numpy()
+    # Coords so we can get embeddings later
+    lons_po, lats_po = utils.coord_trans_shift(po_data["x"].values, po_data["y"].values,order="CH_to_normal")
+    coords_po = np.column_stack((lats_po, lons_po))
+    lons_pa, lats_pa = utils.coord_trans_shift(pa_data["x"].values, pa_data["y"].values,order="CH_to_normal")   
+    coords_pa = np.column_stack((lats_pa, lons_pa))
+
+    return X_cov, y,coords_po, X_test_cov, y_test , coords_pa
+
+def get_data_geoplant(
+    po_csv_path="embeddings_data_and_dictionaries/filtered_geoplant/geoplant_po_france_withcovs.csv",
+    pa_csv_path="embeddings_data_and_dictionaries/filtered_geoplant/geoplant_pa_france_withcovs.csv",
+        ):
+    """
+    Returns:
+        X_cov        (n_po, n_covariates)
+        y            (n_po, n_species)
+        lonlat_po    (n_po, 2)
+
+        X_test_cov   (n_pa, n_covariates)
+        y_true       (n_pa, n_species)
+        coords       (n_pa, 2)
+    coordinate order is lat, lon !! (what models take as input)
+    """
+    po = pd.read_csv(po_csv_path)
+    pa = pd.read_csv(pa_csv_path)
+    covariate_columns = [c for c in po.columns if c.startswith("A")]
+    species_columns = [c for c in po.columns if c.startswith("sp_")]
+    lon_col = "lon"
+    lat_col = "lat"
+
+    # --- PO ---
+    X_cov = po.loc[:, covariate_columns].to_numpy()
+    y = po.loc[:, species_columns].to_numpy()
+    coords_po = po.loc[:, [lat_col, lon_col]].to_numpy() #lat lon order
+
+    # --- PA ---
+    X_test_cov = pa.loc[:, covariate_columns].to_numpy()
+    y_true = pa.loc[:, species_columns].to_numpy()
+    coords_pa = pa.loc[:, [lat_col, lon_col]].to_numpy()
+
+    return X_cov, y, coords_po, X_test_cov, y_true, coords_pa
+
 def train_models(
         pos_encoder,
         do_pca=True,
         n_pca_components=None,
         hidden_size=[256, 256],
-        covariates = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"],
-        po_data_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItrain_po.csv",
         epochs=200,
-        train_MLP=True
+        train_MLP=True,
+        data_callback=get_data_NCEAS #must be deterministic (also called in eval)
 ):
     
 
-    po_data=pd.read_csv(po_data_path)
+    # po_data=pd.read_csv(po_data_path)
 
-    y = pd.get_dummies(po_data["spid"])
-    po_data = pd.concat([po_data.drop(columns=["spid"]), y], axis=1) #For the full one-hot-encoded dataframe
+    # y = pd.get_dummies(po_data["spid"])
+    # po_data = pd.concat([po_data.drop(columns=["spid"]), y], axis=1) #For the full one-hot-encoded dataframe
 
-    po_covariates=po_data.loc[:, covariates]
+    # po_covariates=po_data.loc[:, covariates]
 
-    X_cov=po_covariates.to_numpy()
-    y=y.to_numpy()
+    # X_cov=po_covariates.to_numpy()
+    # y=y.to_numpy()
+    X_cov, y, coords_po, X_test_cov, y_true, coords_pa = data_callback()
+    n_species = y.shape[1]
+    n_cov= X_cov.shape[1]
 
     print("getting embeddings")
 
-    X_emb=get_embeddings(po_data, pos_encoder)
+
+    X_emb=get_embeddings(coords_po, pos_encoder)
     #Normalize
     scaler_emb = StandardScaler()
     scaler_emb.fit(X_emb)
@@ -134,13 +212,13 @@ def train_models(
     PR_cov =fit_multi_GLM(X_cov,y)
     PR_both=fit_multi_GLM(np.concatenate([X_emb,X_cov],axis=1),y)
     if train_MLP:
-        MLP_emb=MLP(in_dim=X_emb.shape[1], hidden=hidden_size, out_dim=30)
+        MLP_emb=MLP(in_dim=X_emb.shape[1], hidden=hidden_size, out_dim=n_species)
         MLP_emb = train_one_MLP(MLP_emb, X_emb, y,epochs=epochs)
 
-        MLP_cov=MLP(in_dim=len(covariates), hidden=hidden_size, out_dim=30)
+        MLP_cov=MLP(in_dim=n_cov, hidden=hidden_size, out_dim=n_species)
         MLP_cov = train_one_MLP(MLP_cov, X_cov, y,epochs=epochs)
 
-        MLP_both=MLP(in_dim=X_emb.shape[1]+len(covariates), hidden=hidden_size, out_dim=30)
+        MLP_both=MLP(in_dim=X_emb.shape[1]+n_cov, hidden=hidden_size, out_dim=n_species)
         MLP_both = train_one_MLP(MLP_both, np.concatenate([X_emb,X_cov],axis=1), y,epochs=epochs)
     else:
         MLP_emb=None
@@ -160,28 +238,24 @@ def evaluate_models(
     MLP_emb,  #from train_one_MLP
     MLP_both,  #from train_one_MLP
     pca_model=None, #to lower dim of X_test_emb.
-    covariates = ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"],
-    pa_csv_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItest_pa.csv",
-    env_csv_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItest_env.csv",
-    species_columns=[
-    'swi01','swi02','swi03','swi04','swi05','swi06','swi07','swi08','swi09','swi10',
-    'swi11','swi12','swi13','swi14','swi15','swi16','swi17','swi18','swi19','swi20',
-    'swi21','swi22','swi23','swi24','swi25','swi26','swi27','swi28','swi29','swi30'],
     train_MLP=True,
+    data_callback=get_data_NCEAS    
 ):
     """
     Evaluation on PA data
     """
-    pa_data=pd.read_csv(pa_csv_path)
-    env=pd.read_csv(env_csv_path)
+
+    X_cov, y, coords_po, X_test_cov, y_true, coords_pa = data_callback()
 
 
-    y_true = pa_data.loc[:, species_columns]
-    X_test_cov = env.loc[:,covariates]
-    X_test_cov=X_test_cov.to_numpy()
-    y_true=y_true.to_numpy()
+    # pa_data=pd.read_csv(pa_csv_path)
+    # env=pd.read_csv(env_csv_path)
+    # y_true = pa_data.loc[:, species_columns]
+    # X_test_cov = env.loc[:,covariates]
+    # X_test_cov=X_test_cov.to_numpy()
+    # y_true=y_true.to_numpy()
 
-    X_test_emb=get_embeddings(env,pos_encoder) ##############################
+    X_test_emb=get_embeddings(coords_pa,pos_encoder)
 
     X_test_cov = scaler_cov.transform(X_test_cov)#norm
     X_test_emb = scaler_emb.transform(X_test_emb)
@@ -226,16 +300,47 @@ def evaluate_models(
     return {
     "auc_cov_PR": auc_cov_PR,
     "auc_emb_PR": auc_emb_PR,
+    "auc_both_PR": auc_both_PR,
     "auc_cov_MLP": auc_cov_MLP,
-    "auc_emb_MLP": auc_emb_MLP
+    "auc_emb_MLP": auc_emb_MLP,
+    "auc_both_MLP": auc_both_MLP
         }
 
 
-
-
-
-
-
+def train_and_eval(
+                pos_encoder,
+                do_pca=False,
+                n_pca_components=None,
+                hidden_size=[256, 256],
+                epochs=200,
+                train_MLP=True,
+                data_callback=get_data_geoplant
+                ):
+    PR_emb, PR_cov, PR_both, MLP_emb, MLP_cov, MLP_both, scaler_cov, scaler_emb, pca = train_models(
+                pos_encoder=pos_encoder,
+                do_pca=do_pca,
+                n_pca_components=n_pca_components,
+                hidden_size=hidden_size,
+                epochs=epochs,
+                train_MLP=train_MLP,
+                data_callback=data_callback
+                )
+            #eval
+    results = evaluate_models(
+                pos_encoder, 
+                scaler_cov, 
+                scaler_emb, 
+                PR_cov, #from fit_multi_GLM
+                PR_emb, #from fit_multi_GLM
+                PR_both, #from fit_multi_GLM
+                MLP_cov, #from train_one_MLP : shape (n_samples, n_species)
+                MLP_emb,  #from train_one_MLP
+                MLP_both,
+                pca_model=pca, #to lower dim of X_test_emb.
+                train_MLP=train_MLP,
+                data_callback=data_callback
+                ) 
+    return results
 
 if __name__ == "__main__":
 #Load model
@@ -259,7 +364,6 @@ if __name__ == "__main__":
         do_pca=False,
         n_pca_components=None,
     )
-
 #Eval
     evaluate_models(
         pos_encoder, 
@@ -271,40 +375,3 @@ if __name__ == "__main__":
         MLP_emb,  #from train_one_MLP
         pca_model=None, #to lower dim of X_test_emb.
         ) 
-
-
-
-import numpy as np
-import pandas as pd
-from sklearn.inspection import permutation_importance
-
-def permutation_importance_multi(PR_list, X, y, feature_names=None, n_repeats=30, random_state=0):
- 
-    n_models = len(PR_list)
-    n_features = X.shape[1]
-    
-    # If feature names not provided
-    if feature_names is None:
-        feature_names = [f"X{i}" for i in range(n_features)]
-    
-    importances = np.zeros((n_features, n_models, n_repeats))
-    
-    # Compute importance for each model
-    for model_idx, model in enumerate(PR_list):
-        result = permutation_importance(
-            model, 
-            X, 
-            y[:, model_idx],
-            n_repeats=n_repeats,
-            random_state=random_state
-        )
-        importances[:, model_idx, :] = result.importances
-    
-    # Mean importance across repeats (axis=2)
-    mean_importance = importances.mean(axis=2)
-    
-    # Build a DataFrame
-    col_names = [f"y{j}" for j in range(n_models)]
-    mean_importance_df = pd.DataFrame(mean_importance, index=feature_names, columns=col_names)
-    
-    return importances, mean_importance_df

@@ -18,6 +18,8 @@ import nn_classes
 import data_extraction
 import hdf5
 import train
+import model_list
+import SDM_eval
 #geoclip
 from geoclip import LocationEncoder
 
@@ -28,11 +30,16 @@ from geoclip import LocationEncoder
 np.random.seed(48)
 torch.manual_seed(48)
 #--------------------------------------------------------------------------------------
-nbr_epochs=120
+
+
+
+nbr_epochs=10
 device="cuda"
 batch_size=4096 #"We use batch size |B| as 512 when training on full dataset. For data-efficient settings with 20%, 10%, and 5% of the data, we use |B| as 256, 256, and 128 respectively"
-save_name="test_modality_rework_image_VS_coords"
+save_name="geoclip_pos_enc_10epochs"
 data_path="embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioCLIP_full_dataset_embeddings.h5"
+#data_path="embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/difference_embeddings.h5"
+#"embeddings_data_and_dictionaries/Embeddings/swiss_bioclip_embeddings/swiss_data_bioclip.h5"
 
 '''
 #Fetching data
@@ -56,6 +63,10 @@ dictionary.to_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/b
 
 #"embeddings_data_and_dictionaries/Embeddings/swiss_bioclip_embeddings/swiss_dictionary"
 dictionary=pd.read_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioclip_data_dictionary_all_taxons")
+
+#data_extraction.download_emb(dictionary, 768, output_dir="difference_embeddings", device="cuda", max_workers=8) 
+
+
 '''
 print("downloading embeddings")
 #make embeddings
@@ -110,16 +121,13 @@ model=utils.train(
 # fourier_dim=64
 # covariate_dim=13
 # hidden_dim=256
-fourier_dim=104    #13*8
-hidden_dim=256
-dim_emb=128
-cov_dim=13
-pos_encoder = nn_classes.Fourier_MLP(original_dim=cov_dim,fourier_dim=fourier_dim, hidden_dim=hidden_dim, output_dim=dim_emb,scales=None)
+dim_emb=512
+pos_encoder =LocationEncoder(from_pretrained=False)
 
 #pos_encoder= nn_classes.RFF_MLPs(original_dim=2, fourier_dim=dim_fourier_encoding, hidden_dim=dim_hidden, output_dim=dim_emb,M=8,sigma_min=2,sigma_max=256, number_layers=4)
 #pos_encoder=utils.RFF_MLPs( original_dim=2, fourier_dim=dim_fourier_encoding, hidden_dim=dim_hidden, output_dim=512,M=8,sigma_min=1,sigma_max=256).to(device)
 
-model= nn_classes.DoubleNetwork_V2(pos_encoder,dim_hidden=768,dim_output=dim_emb).to(device)
+model= nn_classes.DoubleNetwork_V2(pos_encoder=pos_encoder, dim_hidden=768, dim_output=dim_emb).to(device)
 
 
 #pos_encoder= nn_classes.Cov_Fourier_MLP(fourier_dim=dim_fourier_encoding, hidden_dim=dim_hidden, output_dim=dim_emb, covariate_dim=covariate_dim)
@@ -134,11 +142,27 @@ model=train.train(
             device="cuda",
             save_name=save_name,
             saving_frequency=1,
-            nbr_checkppoints=30,   ########
+            nbr_checkppoints=10,   ########
             test_dataloader=test_dataloader,
             test_frequency=1,
             nbr_tests=10,
+            modalities=["images","coords"], #either "images","coords","NCEAS" or "species"
+            dictionary=None,  #if one wants to use a different dictionary in the "species" case
             )
+
+model_list.evaluate_checkpoints(model,
+                    #model_small_pos_enc_correct_frequencies,
+                    #checkpoint_dir="Model_saves/small_pos_enc_correct_frequencies/checkpoints",
+                    checkpoint_dir="Model_saves/geoclip_pos_enc_10epochs/Checkpoints",
+                     save_path="AUC_over_epochs_geoclip_enc_geoplant.png",
+                     data_callback=SDM_eval.get_data_geoplant)
+model_list.evaluate_checkpoints(model,
+                    #model_small_pos_enc_correct_frequencies,
+                    #checkpoint_dir="Model_saves/small_pos_enc_correct_frequencies/checkpoints",
+                    checkpoint_dir="Model_saves/geoclip_pos_enc_10epochs/Checkpoints",
+                     save_path="AUC_over_epochs_geoclip_enc_NCEAS.png",
+                     data_callback=SDM_eval.get_data_NCEAS)
+
 
 
 #https://www.gbif.org/occurrence/

@@ -145,14 +145,15 @@ def group_split(dataset, file_path, dictionary,generator, train_ratio=0.8):
 
 
 
+import train
 
 
 
-
-def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,device="cuda", plot_sims=True,sort_duplicates=True, dictionary_path="embeddings_data_and_dictionaries/data_dictionary_sciName"):
+def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,device="cuda", plot_sims=True,sort_duplicates=True, dictionary_path="embeddings_data_and_dictionaries/data_dictionary_sciName", modalities=["images","coords"]):
     '''Picks random samples and gives the (average) similarity between the image emmbedding and the coordinate embedding
     dictionary is used to get the dataloader. It can be set to None, together with
     '''
+    tokenizer, scaler, bioclip= train.prepare_modality_tools(modalities)
     if dictionary_path is not None:
         dictionary=pd.read_csv(dictionary_path)
     else:
@@ -176,7 +177,8 @@ def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,
         emb_vectors = emb_vectors.to(device)
         coord = coord.to(device)
         idx=idx = idx.numpy().reshape(-1).tolist()
-        logits=doublenetwork(emb_vectors,coord, idx)
+        mod= train.get_modalities(modalities, emb_vectors, coord, idx, ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"], dictionary, scaler, bioclip, tokenizer, device="cuda")
+        logits=doublenetwork(mod[0],mod[1])
 
         logits=logits/doublenetwork.logit_scale.exp()
         #get values
@@ -234,6 +236,16 @@ def coord_trans(x, y, order="CH_to_normal"):
 def coord_trans_shift(x,y, order="CH_to_normal"):
     "converts from the NCEAS dataset coordinates (they have a shift) to regular lat, lon (and vice versa)"
     shift_x, shift_y= (1011627.4909483634, -100326.1477937577) #See "coordinates.ipynb"
+    if order=="CH_to_normal":
+        lons, lats = coord_trans(x-shift_x, y-shift_y,order="CH_to_normal")
+        return lons, lats
+    elif order =="normal_to_CH":
+        x_trans, y_trans=coord_trans(x, y, order= "normal_to_CH")
+        return x_trans+shift_x, y_trans+shift_y
+    
+def coord_trans_shift_corrected(x,y, order="CH_to_normal"):
+    "converts from the NCEAS dataset coordinates (they have a shift) to regular lat, lon (and vice versa)"
+    shift_x, shift_y= (1011027.4909483634, -101026.1477936177) # +700 for each, kinda random
     if order=="CH_to_normal":
         lons, lats = coord_trans(x-shift_x, y-shift_y,order="CH_to_normal")
         return lons, lats
@@ -546,44 +558,19 @@ def plot_species_density(df, species_name, country_name, grid_resolution=0.1, ba
         kde = gaussian_kde(species_points_inside.T, bw_method=bandwidth)
         density = kde(country_coords_np.T)
     
-    # # Plot
-    # plt.figure(figsize=(8,6))
-    # plt.scatter(country_coords_np[:,0], country_coords_np[:,1], c=density, s=50, cmap='viridis')
-    # plt.colorbar(label='Density')
-    # if plot_points:
-    #     plt.scatter(species_points_inside[:,0], species_points_inside[:,1], c='red', s=2, alpha=0.5, label='Occurrences')
-    # plt.xlabel('Longitude')
-    # plt.ylabel('Latitude')
-    # plt.title(f"Spatial density of {species_name} in {country_name}")
-    # plt.legend()
-    # plt.show()
-    # Create a regular grid over the map
-    x_min, x_max = country_coords_np[:,0].min(), country_coords_np[:,0].max()
-    y_min, y_max = country_coords_np[:,1].min(), country_coords_np[:,1].max()
-    X, Y = np.meshgrid(np.linspace(x_min, x_max, 200),
-                    np.linspace(y_min, y_max, 200))
-    grid_coords = np.vstack([X.ravel(), Y.ravel()])
-
-    # Evaluate KDE on the grid
-    Z = kde(grid_coords).reshape(X.shape)
-
-    # Plot density as a smooth surface
+    # Plot
     plt.figure(figsize=(8,6))
-    plt.imshow(Z, origin='lower', aspect='auto',
-            extent=[x_min, x_max, y_min, y_max],
-            cmap='viridis')
+    plt.scatter(country_coords_np[:,0], country_coords_np[:,1], c=density, s=50, cmap='viridis')
     plt.colorbar(label='Density')
-
-    # Optionally overlay points
     if plot_points:
-        plt.scatter(species_points_inside[:,0], species_points_inside[:,1],
-                    c='red', s=2, alpha=0.5, label='Occurrences')
-
+        plt.scatter(species_points_inside[:,0], species_points_inside[:,1], c='red', s=2, alpha=0.5, label='Occurrences')
     plt.xlabel('Longitude')
     plt.ylabel('Latitude')
     plt.title(f"Spatial density of {species_name} in {country_name}")
     plt.legend()
     plt.show()
+    
+
 
 def get_species_emb(indices, dictionary, model,tokenizer, column_name="taxa_bioclip", device="cuda"):
     '''
@@ -609,3 +596,8 @@ def get_species_emb(indices, dictionary, model,tokenizer, column_name="taxa_bioc
         embeddings = model.encode_text(tokens)
     return embeddings
 
+def get_example(dataset_path, idx):
+    '''Fetches an example from the HDF5 dataset'''
+    dataset=data_extraction.HDF5Dataset(dataset_path)
+    emb_vector, coord , idx = dataset[idx]
+    return emb_vector, coord, idx
