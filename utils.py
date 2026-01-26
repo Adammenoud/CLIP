@@ -96,10 +96,13 @@ def dataloader_emb(file_path,batch_size,shuffle=False,train_proportion=0.8): #fr
     return train_loader, test_loader
     '''
 
-def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=False, dictionary=None,drop_last=True): #from a h5 file
+def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=False, dictionary=None,drop_last=True, dataset="HDF5_dataset"): #from a h5 file
     '''solves to the duplication problem, but need to take a dictionary with gbifID column.'''
+    if dataset == "HDF5_dataset":
+        dataset=data_extraction.HDF5Dataset(file_path)
+    elif dataset == "ordered_HDF5Dataset":
+        dataset=data_extraction.ordered_HDF5Dataset(file_path)
 
-    dataset=data_extraction.HDF5Dataset(file_path)
     train_size = int(train_ratio * len(dataset))
     test_size = len(dataset) - train_size
 
@@ -233,7 +236,7 @@ def coord_trans(x, y, order="CH_to_normal"):
         raise ValueError("order must be either 'CH_to_normal' or 'normal_to_CH'")
     return x_out, y_out
 
-def coord_trans_shift(x,y, order="CH_to_normal"):
+def coord_trans_shift_old(x,y, order="CH_to_normal"):
     "converts from the NCEAS dataset coordinates (they have a shift) to regular lat, lon (and vice versa)"
     shift_x, shift_y= (1011627.4909483634, -100326.1477937577) #See "coordinates.ipynb"
     if order=="CH_to_normal":
@@ -243,9 +246,9 @@ def coord_trans_shift(x,y, order="CH_to_normal"):
         x_trans, y_trans=coord_trans(x, y, order= "normal_to_CH")
         return x_trans+shift_x, y_trans+shift_y
     
-def coord_trans_shift_corrected(x,y, order="CH_to_normal"):
+def coord_trans_shift(x,y, order="CH_to_normal"):
     "converts from the NCEAS dataset coordinates (they have a shift) to regular lat, lon (and vice versa)"
-    shift_x, shift_y= (1011027.4909483634, -101026.1477936177) # +700 for each, kinda random
+    shift_x, shift_y= (1010927.4909483634, -101026.1477937577) # +700 for each, kinda random
     if order=="CH_to_normal":
         lons, lats = coord_trans(x-shift_x, y-shift_y,order="CH_to_normal")
         return lons, lats

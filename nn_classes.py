@@ -32,28 +32,53 @@ class LocationEncoderAdapter(torch.nn.Module):
         return self.encoder(coordinates)
 
 
+def detach_k(sim_matrix, k):
+    # sim_matrix: (n, n)
+    top_k_values, top_k_indices = torch.topk(sim_matrix, k, dim=1)
 
-def CE_loss(logits, device="cuda"):
-    '''logits of size (n, n), containing the cosine similarities (n would be batch size for CLIP)'''
-    # Create labels
+    #mask: true on the top k elements (for each sample), false otherwise
+    mask = torch.zeros_like(sim_matrix, dtype=torch.bool)
+    mask.scatter_(1, top_k_indices, True)
+
+    sim_matrix = sim_matrix * (~mask) + sim_matrix.detach() * mask  #combine
+
+    return sim_matrix
+
+
+def CE_loss(logits, device="cuda", detach_k_top=None):
+    '''logits of size (n, n), containing the cosine similarities (n would be batch size for CLIP)
+    detach_detach_k_top should be a tuple (k_images,k_coords) of the number of gradient to detach for each modality
+    '''
+    # Create "labels"
     labels = torch.arange(logits.size(0)).to(device)
 
-    loss_fn = nn.CrossEntropyLoss()
+    loss_fct = nn.CrossEntropyLoss()
 
-    # Image-to-Text
-    loss_i2t = loss_fn(logits, labels)
+    if detach_k_top is not None:
+        if detach_k_top[0] is not None:  # detach top-k from image-to-text logits
+            logits_i2t = detach_k(logits, detach_k_top[0])  # detach along text dim
+        else:
+            logits_i2t = logits
 
-    # Text-to-Image (transpose logits)
-    loss_t2i = loss_fn(logits.T, labels)
-
-    # Total symmetric loss
-    loss = (loss_i2t + loss_t2i) / 2
+        if detach_k_top[1] is not None:  # detach top-k from text-to-image logits
+            logits_t2i = detach_k(logits.T, detach_k_top[1])  # detach along image dim
+        else:
+            logits_t2i = logits.T
+    else:
+        logits_i2t = logits
+        logits_t2i = logits.T
     
+    loss_i2t = loss_fct(logits_i2t, labels)
+    loss_t2i = loss_fct(logits_t2i, labels)
+    #average
+    loss = (loss_i2t + loss_t2i) / 2
+            
     return loss
 
 class MLP(nn.Module):
-    def __init__(self, in_dim, hidden=[256, 256], out_dim=30):
+    def __init__(self, in_dim, hidden=[256, 256], out_dim=30, drop_last=False):
         super().__init__()
+        self.drop_last=drop_last
         layers = []
         prev = in_dim
         for h in hidden:
@@ -64,7 +89,10 @@ class MLP(nn.Module):
         self.net = nn.Sequential(*layers)
 
     def forward(self, x):
-        x=self.net(x)
+        if not self.drop_last:
+            x=self.net(x)
+        else:
+            x = self.net[:-1](x)
         return x
 
 class CustomMLP(nn.Module): #to encoode location (obsolete)
@@ -342,3 +370,25 @@ class GeneralCrossEntropyLoss(nn.Module):
         log_probs = torch.nn.functional.log_softmax(logits, dim=1)
         loss = -(target * log_probs).sum(dim=1).mean()
         return loss
+    
+from geoCLIP_classes import GaussianEncoding
+
+class AllGaussianEncoding(nn.Module):
+    """Layer for mapping coordinates using random Fourier features.
+        The dimension of output is encoded_size*3
+    """
+
+    def __init__(self,
+                 input_size=2,
+                 encoded_size=256):
+        """
+        Args:
+        """
+        super().__init__()
+        self.g1=GaussianEncoding(sigma = 2**0,input_size= input_size,encoded_size=encoded_size)
+        self.g2=GaussianEncoding(sigma = 2**4,input_size= input_size,encoded_size=encoded_size)
+        self.g3=GaussianEncoding(sigma = 2**8,input_size= input_size,encoded_size=encoded_size)
+
+    def forward(self, x):
+        x=torch.cat((self.g1(x),self.g2(x),self.g3(x)), dim=1)
+        return x

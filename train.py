@@ -16,7 +16,7 @@ import warnings
 
 import utils
 import nn_classes
-
+import data_extraction
 
 def train(doublenetwork,
           epochs,
@@ -32,9 +32,19 @@ def train(doublenetwork,
           nbr_tests=10,
           modalities=["images","coords"], #either "images","coords","NCEAS" or "species". Has to be compatible with the model's forward
           dictionary=None,  #if want to use a different dictionary in the "species" case
-          covariate_names= ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"]
+          covariate_names= ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"],
+          detach_k_top=None
           ):
-    '''nbr_chepoints < epochs, please'''
+    '''
+    Performs nbr_tests batchs of validation at the end of every test_frequency epochs.
+    It most hold that nbr_chepoints < epochs
+
+    "modalities" can be either "images","coords","NCEAS" or "species". The order is the order that will be used in the model's forward method.
+    They are implemented using the "prepare_modality_tools" and "get_modalities" functions.
+    
+    "dictionary" is required only when working with the "species" modality.
+    "covariate_names" is used only for the NCEAS covariates.
+    '''
     #### initialization
     doublenetwork = doublenetwork.to(device)
     doublenetwork.train()
@@ -52,9 +62,7 @@ def train(doublenetwork,
                 f"Running only {n_available_batches} tests.",
                 RuntimeWarning,)
     # adjustments for other modalities than images, coords
-    tokenizer, scaler, bioclip= prepare_modality_tools(modalities)
-    if dictionary==None:
-            dictionary=pd.read_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioclip_data_dictionary_all_taxons")
+    tokenizer, scaler, bioclip= prepare_modality_tools(modalities, covariate_names)
     #### training loop
     for ep in range(epochs):
         pbar = tqdm(dataloader)
@@ -66,7 +74,7 @@ def train(doublenetwork,
 
             #also change idx on test loop
             logits=doublenetwork(modality_list[0],modality_list[1])  #logits of cosine similarities
-            loss=nn_classes.CE_loss(logits,device=device)
+            loss=nn_classes.CE_loss(logits,device=device, detach_k_top=detach_k_top)
             
             optimizer.zero_grad()
             loss.backward()
@@ -167,14 +175,13 @@ def get_modalities(modality_names, images, coords, idx, covariate_names, diction
     return [results[mod] for mod in modality_names]
 
 
-def prepare_modality_tools(modalities):
+def prepare_modality_tools(modalities, covariate_names):
     tokenizer = None
     scaler = None
     bioclip = None
     if "NCEAS" in modalities: #scaling done over po data (simpler in terms of implementation, not ideal)
         po_data_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItrain_po.csv"
         po_data=pd.read_csv(po_data_path)
-        covariate_names=["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"]
         po_covariates=po_data.loc[:,covariate_names ]
         X_cov=po_covariates.to_numpy()
         scaler = StandardScaler()

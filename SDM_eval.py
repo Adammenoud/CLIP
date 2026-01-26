@@ -10,6 +10,10 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import GridSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.multioutput import MultiOutputClassifier
 
 
 class MLP(nn.Module):
@@ -133,6 +137,9 @@ def get_data_geoplant(
     pa_csv_path="embeddings_data_and_dictionaries/filtered_geoplant/geoplant_pa_france_withcovs.csv",
         ):
     """
+        The covariates come form AlphaEarth, and the data form Geoplant (see /filtered_geoplant/filter_geoplant.py). 
+        It would be also be interesting to have the 
+        covariates from the geoplant rasters.
     Returns:
         X_cov        (n_po, n_covariates)
         y            (n_po, n_species)
@@ -171,17 +178,6 @@ def train_models(
         train_MLP=True,
         data_callback=get_data_NCEAS #must be deterministic (also called in eval)
 ):
-    
-
-    # po_data=pd.read_csv(po_data_path)
-
-    # y = pd.get_dummies(po_data["spid"])
-    # po_data = pd.concat([po_data.drop(columns=["spid"]), y], axis=1) #For the full one-hot-encoded dataframe
-
-    # po_covariates=po_data.loc[:, covariates]
-
-    # X_cov=po_covariates.to_numpy()
-    # y=y.to_numpy()
     X_cov, y, coords_po, X_test_cov, y_true, coords_pa = data_callback()
     n_species = y.shape[1]
     n_cov= X_cov.shape[1]
@@ -278,11 +274,6 @@ def evaluate_models(
         y_pred_emb_MLP=MLP_emb(torch.from_numpy(X_test_emb).float()).detach().numpy().squeeze()
         y_pred_both_MLP=MLP_both(torch.from_numpy(np.concatenate([X_test_emb,X_test_cov],axis=1)).float()).detach().numpy().squeeze()
 
-
-    #importances, importance_df= permutation_importance_multi(PR_cov, X_test_cov, y_true, feature_names=None, n_repeats=30, random_state=0)
-    # print("importance:",importance_df)
-    # print("importance mean:",importance_df.mean(axis=1))
-
     print(y_true.shape, y_pred_cov.shape)
     auc_cov_PR = roc_auc_score(y_true, y_pred_cov)
     print("AUC cov PR:", auc_cov_PR)
@@ -341,6 +332,49 @@ def train_and_eval(
                 data_callback=data_callback
                 ) 
     return results
+
+
+
+def sklearn_classification(X_cov=None, y=None, X_test_cov=None, y_true=None, data_callback=None):
+    '''
+    10-fold CV for the k parameter, then outputs the AUC for k-NN classification on test set.
+    Handles multi-output binary classification (e.g., 62 responses at once).
+    '''
+    if data_callback is not None:
+        X_cov, y, coords_po, X_test_cov, y_true, coords_pa = data_callback()  
+
+
+    pipeline = Pipeline([
+        ("scaler", StandardScaler()),
+        ("knn", MultiOutputClassifier(KNeighborsClassifier()))
+    ])
+    
+    param_grid = {"knn__estimator__n_neighbors": range(1, 20)}
+    
+    CV_object = GridSearchCV(
+        pipeline, 
+        param_grid, 
+        cv=10, 
+        scoring='roc_auc_ovr',  # will work for multi-output
+        n_jobs=-1
+    )
+    
+    CV_object.fit(X_cov, y)
+    best_k = CV_object.best_params_["knn__estimator__n_neighbors"]
+    
+    y_pred_proba = np.array([estimator.predict_proba(X_test_cov)[:, 1] 
+                                for estimator in CV_object.best_estimator_.named_steps['knn'].estimators_]).T
+    
+    aucs = []
+    for i in range(y_true.shape[1]):
+        auc = roc_auc_score(y_true[:, i], y_pred_proba[:, i])
+        aucs.append(auc)
+    mean_auc = np.mean(aucs)
+    print(f"Mean AUC across {y_true.shape[1]} responses: {mean_auc:.4f}, best k={best_k}")
+    return mean_auc, best_k
+
+
+    
 
 if __name__ == "__main__":
 #Load model

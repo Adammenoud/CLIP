@@ -1,12 +1,17 @@
 #import necessary for models
+from py_compile import main
+from xml.parsers.expat import model
 import utils
 import importlib
-from geoclip import LocationEncoder
+from geoclip import LocationEncoder, GeoCLIP
 import open_clip
 import torch
 import nn_classes
 import SDM_eval
 import csv
+import torch.nn as nn
+import classifier_training
+import pandas as pd
 # imorts specific to the file
 import glob
 import torch
@@ -58,23 +63,66 @@ state_dict = torch.load("Model_saves/small_pos_enc_correct_frequencies/checkpoin
 model_small_pos_enc_correct_frequencies.load_state_dict(state_dict)
 pos_enc_correct_frequencies=model_small_pos_enc_correct_frequencies.pos_encoder
 
-#actual geoclip?
+#classifier
+fourier_dim=32
+dictionary=pd.read_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioclip_data_dictionary_all_taxons")
+class_name="scientificName"
+n_species=len(dictionary[class_name].unique())
+classifier = nn.Sequential(
+        nn_classes.Fourier_enc(fourier_dim),
+        nn_classes.MLP(
+            in_dim=fourier_dim,
+            hidden=[256, 256, 256],
+            out_dim=n_species,
+            drop_last=True
+        )
+    )
+state_dict = torch.load("classifier_run_checkpoints/model.pt")
+classifier.load_state_dict(state_dict)
+classifier = classifier.to("cuda")
+
+#actual goeclip:
+dim_hidden=768
+dim_output=512
+image_encoder=nn.Sequential( nn.Linear(768, dim_hidden),nn.ReLU(),nn.Linear(dim_hidden, dim_output) )
+model_actual_geoclip= GeoCLIP(from_pretrained=False)
+model_actual_geoclip.image_encoder=image_encoder
+state_dict = torch.load("Model_saves/actual_geoclip_long_run/model.pt")
+model_actual_geoclip.load_state_dict(state_dict)
+pos_enc_actual_geoclip=model_actual_geoclip.location_encoder.to("cuda")
+
+#drop high sigma
+model_drop_high_sigma=nn_classes.DoubleNetwork_V2(LocationEncoder(from_pretrained=False, sigma=[2**0, 2**4]))
+state_dict = torch.load("/home/adam/source/CLIP/Model_saves/geoclip_pos_enc_drop_high_sigma/model.pt")
+model_drop_high_sigma.load_state_dict(state_dict)
+pos_encoder_drop_high_sigma=model_drop_high_sigma.pos_encoder.to("cuda")
+
+#actual geoclip queue size = 1
+dim_hidden=768
+dim_output=512
+image_encoder=nn.Sequential( nn.Linear(768, dim_hidden),nn.ReLU(),nn.Linear(dim_hidden, dim_output) )
+model_queue_1= GeoCLIP(from_pretrained=False,queue_size=1)
+model_queue_1.image_encoder=image_encoder.to("cuda")
 
 pos_encoders_dict = {
-    "pos_enc_geoclip_pos_enc": pos_enc_geoclip_pos_enc,
-    "pos_enc_difference": pos_enc_difference,
-    "pos_enc_geoclip_paper_untrained": pos_enc_geoclip_paper_untrained,
-    "pos_enc_geoclip_paper_trained": pos_enc_geoclip_paper_trained,
-    "pos_enc_species_emb": pos_enc_species_emb,
-    "pos_enc_correct_frequencies": pos_enc_correct_frequencies
+    "geoclip_pos_enc": pos_enc_geoclip_pos_enc,
+    "difference": pos_enc_difference,
+    "geoclip_paper_untrained": pos_enc_geoclip_paper_untrained,
+    "geoclip_paper_trained": pos_enc_geoclip_paper_trained,
+    "species_emb": pos_enc_species_emb,
+    "correct_frequencies": pos_enc_correct_frequencies,
+    "classifier" : classifier,
+    "actual_geoclip": pos_enc_actual_geoclip,
+    "drop_high_sigma": pos_encoder_drop_high_sigma,
+    #"queue_1" : 
 }
 #---------------------------------------------------------------    
 #Checking all models on PO/PA data
 
 
-def write_results_to_csv( pos_encoders_dict,data_callback, save_name="results.csv"):
+def write_results_to_csv( pos_encoders_dict,data_callback, save_name="results.csv",do_pca=False, n_pca_components=None):
     '''takes a dictionary and evaluate model for each pos encoder
-       (not yet generalised)'''
+       (not generalised to other metrics)'''
     with open(save_name, mode="w", newline="") as file:
         writer = csv.writer(file)
         
@@ -87,12 +135,14 @@ def write_results_to_csv( pos_encoders_dict,data_callback, save_name="results.cs
             print(f"Evaluating {name} model")
             results= SDM_eval.train_and_eval(
                 pos_encoder=pos_encoder,
-                do_pca=False,
-                n_pca_components=None,
+                do_pca=do_pca,
+                n_pca_components=n_pca_components,
                 hidden_size=[256, 256],
                 epochs=200,
                 train_MLP=True,
-                data_callback=data_callback)
+                data_callback=data_callback
+                
+                )
             writer.writerow([
                     name,
                     results["auc_cov_PR"],
@@ -104,7 +154,6 @@ def write_results_to_csv( pos_encoders_dict,data_callback, save_name="results.cs
                 ])
 
 
-print("Evaluating checkpoints for geoclip_pos_enc model")
 def extract_step(path):
     match = re.search(r'checkpoint_(\d+)', path)
     if match:
@@ -129,11 +178,10 @@ def evaluate_checkpoints(model, checkpoint_dir,
     # Sort by training step
     checkpoint_paths = sorted(checkpoint_paths, key=extract_step)
     
-    # Lists to store results
     auc_list_MLP = []
     auc_list_PR = []
 
-    plt.figure(figsize=(8, 5))  # prepare figure for runtime updates
+    plt.figure(figsize=(8, 5))
 
     for i, ckpt_path in enumerate(checkpoint_paths):
         print("Loading checkpoint:", ckpt_path)
@@ -161,10 +209,16 @@ def evaluate_checkpoints(model, checkpoint_dir,
     
     return auc_list_MLP, auc_list_PR
 
-#write_results_to_csv(pos_encoders_dict, data_callback=SDM_eval.get_data_geoplant) #NCEAS data by default
-evaluate_checkpoints(model_geoclip_pos_enc,
-                    #model_small_pos_enc_correct_frequencies,
-                    #checkpoint_dir="Model_saves/small_pos_enc_correct_frequencies/checkpoints",
-                    checkpoint_dir="Model_saves/geoclip_pos_enc/Checkpoints",
-                     save_path="AUC_over_training_checkpoints_geoclip_enc_NCEAS.png",
-                     data_callback=SDM_eval.get_data_NCEAS)
+if __name__ == "__main__":
+    print("evaluation")
+    write_results_to_csv(pos_encoders_dict, data_callback=SDM_eval.get_data_geoplant,save_name="results/AUC/results_geoplant.csv",do_pca=False)
+
+
+# evaluate_checkpoints(model_geoclip_pos_enc,
+#                     #model_small_pos_enc_correct_frequencies,
+#                     #checkpoint_dir="Model_saves/small_pos_enc_correct_frequencies/checkpoints",
+#                     checkpoint_dir="/home/adam/source/CLIP/Model_saves/geoclip_pos_enc_10epochs/checkpoints",
+#                         save_path="AUC_over_first_epochs_geoclip_pos_enc.png",
+#                         data_callback=SDM_eval.get_data_geoplant)
+
+    
