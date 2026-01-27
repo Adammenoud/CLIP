@@ -48,7 +48,7 @@ training:
 # ----------------------------
 # Optional: save name pattern
 # ----------------------------
-save_name: "test_yaml_config"
+run_name: "corrected_temperature_gradient"
 wandb:
   project: contrastive_learning
   entity: adammenoud

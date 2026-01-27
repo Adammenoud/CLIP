@@ -267,7 +267,9 @@ class DoubleNetwork_V2(nn.Module):
     def __init__(self, pos_encoder=LocationEncoder(from_pretrained=False),dim_hidden=768,dim_output=512,device="cuda",temperature=0.07):
         super().__init__()
         self.pos_encoder=pos_encoder
-        self.logit_scale = nn.Parameter(torch.log(torch.tensor(1/temperature))).to(device)
+        #self.logit_scale = nn.Parameter(torch.log(torch.tensor(1/temperature))).to(device) # This used to freeze the gradient... Why?
+        self.logit_scale = nn.Parameter(torch.tensor([1.0 / temperature], dtype=torch.float32, device=device).log())
+
         self.device=device
 
 

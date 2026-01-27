@@ -231,10 +231,6 @@ def recall_at_k(logits, k=1):
 
 
 def get_metrics(logits):
-    """
-    logits: [B, B] similarity matrix
-    returns: dict[str, float]
-    """
     B = logits.size(0)
 
     metrics = {

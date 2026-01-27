@@ -39,10 +39,10 @@ os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY')
 
 
 run = wandb.init(
-    project=static_cfg.wandb['project'],
-    entity=static_cfg.wandb['entity'],
+    project = static_cfg['wandb']['project'],
+    entity  = static_cfg['wandb']['entity'],
     config=static_cfg,
-    name=static_cfg.run_name
+    name=static_cfg['run_name']
 )
 cfg = wandb.config  # static defaults + sweep overrides
 
@@ -65,7 +65,7 @@ dictionary=pd.read_csv(dict_path)
 
 print("spliting data")
 dataloader, test_dataloader =utils.dataloader_emb(data_path,
-                                                  batch_size=cfg.batch_size, 
+                                                  batch_size=cfg.training['batch_size'], 
                                                   shuffle=cfg.shuffle,
                                                   train_ratio=cfg.train_ratio, 
                                                   sort_duplicates=cfg.sort_duplicates, 
@@ -80,7 +80,7 @@ else:
     sigma=[2**0, 2**4, 2**8]
 
 if cfg.model_name=="contrastive":
-    model=nn_classes.DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=cfg.pretrained_geoclip_encoder))
+    model=nn_classes.DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=cfg.training['pretrained_geoclip_encoder']))
 else:
     raise Exception(f"invalid model_name: found '{cfg.model_name}' instead of 'contrastive'")
 
@@ -89,18 +89,18 @@ else:
 print("training")
 model=train.train(
             model,
-            nbr_epochs=cfg.nbr_epochs,
+            epochs=cfg.training['epochs'],
             dataloader=dataloader,
-            batch_size=cfg.batch_size,
-            lr=cfg.lr,    
-            device=cfg.device,
-            save_name=cfg.save_name,
-            saving_frequency=cfg.saving_frequency,
-            nbr_checkppoints=cfg.nbr_checkppoints, 
+            batch_size=cfg.training['batch_size'],
+            lr=cfg.training['lr'],    
+            device=cfg.training['device'],
+            save_name=cfg.run_name,
+            saving_frequency=cfg.training['saving_frequency'],
+            nbr_checkppoints=cfg.training['nbr_checkpoints'], 
             test_dataloader=test_dataloader,
-            test_frequency=cfg.test_frequency,
-            nbr_tests=cfg.nbr_tests,
-            modalities=cfg.modalities, 
+            test_frequency=cfg.training['test_frequency'],
+            nbr_tests=cfg.training['nbr_tests'],
+            modalities=cfg.training['modalities'], 
             dictionary=dictionary,  #if one wants to use a different dictionary in the "species" case
             )
 
