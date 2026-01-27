@@ -14,6 +14,7 @@ from geoclip import LocationEncoder
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 import open_clip
+from geoclip import LocationEncoder
 
 def get_resnet(dim_emb, device="cuda"):
     model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1) #can also set weights to None
@@ -263,7 +264,7 @@ class DoubleNetwork(nn.Module):
         return logits
     
 class DoubleNetwork_V2(nn.Module):
-    def __init__(self, pos_encoder,dim_hidden=768,dim_output=512,device="cuda",temperature=0.07):
+    def __init__(self, pos_encoder=LocationEncoder(from_pretrained=False),dim_hidden=768,dim_output=512,device="cuda",temperature=0.07):
         super().__init__()
         self.pos_encoder=pos_encoder
         self.logit_scale = nn.Parameter(torch.log(torch.tensor(1/temperature))).to(device)

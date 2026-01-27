@@ -242,7 +242,7 @@ class ordered_HDF5Dataset(Dataset):
     The names of the hdf5 datasets downloaded with download_embeddings are: "vectors_bioclip", "vectors_dino", "coordinates"
     '''
 
-    def __init__(self, file_path, dictionary, data_name="vectors", label_name="coordinates",valid_name="valid"):
+    def __init__(self, file_path, dictionary, data_name="vectors", label_name="coordinates",valid_name="valid", do_valid=True):
         self.file_path = file_path
         self.data_name = data_name
         self.label_name = label_name
@@ -251,11 +251,12 @@ class ordered_HDF5Dataset(Dataset):
         self.dictionary= dictionary
         self.file = None  # file will be opened per worker
 
-        # Open once to read the valid mask
-        with h5py.File(file_path, "r") as f:
-            valid_mask = f[self.valid_name][:]
-        # Filter the dictionary to only keep valid rows
-        self.dictionary = self.dictionary.loc[valid_mask[self.dictionary.index]]
+        if do_valid:
+            # Open once to read the valid mask
+            with h5py.File(file_path, "r") as f:
+                valid_mask = f[self.valid_name][:]
+            # Filter the dictionary to only keep valid rows
+            self.dictionary = self.dictionary.loc[valid_mask[self.dictionary.index]]
 
     def __len__(self):
         return len(self.dictionary)
@@ -317,6 +318,7 @@ class dictionary_data(Dataset):
         return data, label, dict_idx
 
 def get_species_emb(dictionary, output_dir, batch_size=4096):
+    #Load bioclip model
     bioclip, preprocess_train, processor = open_clip.create_model_and_transforms('hf-hub:imageomics/bioclip-2')
     tokenizer = open_clip.get_tokenizer('hf-hub:imageomics/bioclip-2')
     bioclip = bioclip.to("cuda")
@@ -371,8 +373,8 @@ if __name__== "__main__":
     
     #INaturalist data (from the filtered csv's):
     # print("making dictionary")
-    # path_occurences="embeddings_data_and_dictionaries/filtered_inaturalist/occurrence_arthropods.txt"
-    # path_multimedia="embeddings_data_and_dictionaries/filtered_inaturalist/multimedia_arthropods.txt"
+    # path_occurences="Data/filtered_inaturalist/occurrence_plants.txt"
+    # path_multimedia="Data/filtered_inaturalist/multimedia_plants.txt"
     # taxa_cols= ['kingdom','phylum','class', 'order','family','genus','species']
     # extra_occ_columns=['scientificName','countryCode']+ taxa_cols
     # dictionary=get_dictionary(None, path_occurences, path_multimedia,extra_occ_columns=extra_occ_columns,sep=",")#3167066 rows
@@ -385,7 +387,7 @@ if __name__== "__main__":
     #     .apply(lambda row: ' '.join([v for v in row if v]), axis=1) #separated by only a space, like in bioclip
     # )
     # #save
-    # dictionary.to_csv("Embeddings_and_dictionaries/dictionary_inaturalist_FR_arthropods")
+    # dictionary.to_csv("Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants")
 
 
     # print("downloading arthropods embeddings")
@@ -396,10 +398,27 @@ if __name__== "__main__":
     # download_emb(dictionary, dim_emb=768, output_dir="embeddings_inaturalist_FR_arthropods",max_workers=64)
     # print("download arthropods finished")
 
-    # print("downloading mushrooms embeddings")
+    print("downloading plants embeddings")
+    #make embeddings
+    dictionary= pd.read_csv("Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants")
+    download_emb(dictionary, dim_emb=768, output_dir="embeddings_inaturalist_FR_plants",max_workers=16)
+    print("download plants finished")
+
+    # print("downloading plants embeddings")
     # #make embeddings
     # dictionary= pd.read_csv("Embeddings_and_dictionaries/dictionary_inaturalist_FR_mushrooms")
     # dictionary=dictionary
     # download_emb(dictionary, dim_emb=768, output_dir="embeddings_inaturalist_FR_mushrooms",max_workers=64)
     # print("download mushrooms finished")
-    pass
+
+    # #Arthropods
+    # dictionary= pd.read_csv("Embeddings_and_dictionaries/arthropods/dictionary_inaturalist_FR_arthropods")
+    # get_species_emb(dictionary, "Embeddings_and_dictionaries/arthropods/species_embeddings_inaturalist_FR_arthropods", batch_size=4096)
+
+    # #Mushrooms
+    # dictionary= pd.read_csv("Embeddings_and_dictionaries/mushrooms/dictionary_inaturalist_FR_mushrooms")
+    # get_species_emb(dictionary, "Embeddings_and_dictionaries/mushrooms/species_embeddings_inaturalist_FR_mushrooms", batch_size=4096)
+
+    # #Plants
+    # dictionary= pd.read_csv("Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants")
+    # get_species_emb(dictionary, "Embeddings_and_dictionaries/plants/species_embeddings_inaturalist_FR_plants", batch_size=4096)

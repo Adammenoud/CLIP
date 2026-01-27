@@ -19,10 +19,9 @@ import re
 import matplotlib.pyplot as plt
 import os
 
-
+device="cuda"
 
 #geoclip pos encoder model (my model)
-data_path="embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioCLIP_full_dataset_embeddings.h5"
 dim_emb=512
 pos_encoder_geoclip_pos_enc =LocationEncoder(from_pretrained=False)
 model_geoclip_pos_enc= nn_classes.DoubleNetwork_V2(pos_encoder=pos_encoder_geoclip_pos_enc, dim_hidden=768, dim_output=dim_emb).to("cuda")
@@ -31,7 +30,6 @@ model_geoclip_pos_enc.load_state_dict(state_dict)
 pos_enc_geoclip_pos_enc=model_geoclip_pos_enc.pos_encoder
 
 #difference embeddings model
-data_path="embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/difference_embeddings.h5"
 dim_emb=512
 pos_encoder_difference =LocationEncoder(from_pretrained=False)
 model_difference= nn_classes.DoubleNetwork_V2(pos_encoder=pos_encoder_difference, dim_hidden=768, dim_output=dim_emb).to("cuda")
@@ -47,8 +45,6 @@ pos_enc_geoclip_paper_trained =LocationEncoder(from_pretrained=True).to("cuda")
 pos_enc_geoclip_paper_untrained =LocationEncoder(from_pretrained=False).to("cuda")
 
 # downloaded_species_emb_VS_coords
-device="cuda"
-data_path="embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioCLIP_species_embeddings.h5"
 dim_emb=512
 pos_enc_species_emb = LocationEncoder(from_pretrained=False).to("cuda")
 model_species_emb = nn_classes.DoubleNetwork_V2(pos_enc_species_emb, dim_hidden=768, dim_output=dim_emb).to(device)
@@ -65,7 +61,7 @@ pos_enc_correct_frequencies=model_small_pos_enc_correct_frequencies.pos_encoder
 
 #classifier
 fourier_dim=32
-dictionary=pd.read_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioclip_data_dictionary_all_taxons")
+dictionary=pd.read_csv("Embeddings_and_dictionaries/Plantnet_old/Bioclip_encoder/bioclip_data_dictionary_all_taxons")
 class_name="scientificName"
 n_species=len(dictionary[class_name].unique())
 classifier = nn.Sequential(
@@ -114,7 +110,6 @@ pos_encoders_dict = {
     "classifier" : classifier,
     "actual_geoclip": pos_enc_actual_geoclip,
     "drop_high_sigma": pos_encoder_drop_high_sigma,
-    #"queue_1" : 
 }
 #---------------------------------------------------------------    
 #Checking all models on PO/PA data
@@ -211,7 +206,7 @@ def evaluate_checkpoints(model, checkpoint_dir,
 
 if __name__ == "__main__":
     print("evaluation")
-    write_results_to_csv(pos_encoders_dict, data_callback=SDM_eval.get_data_geoplant,save_name="results/AUC/results_geoplant.csv",do_pca=False)
+    write_results_to_csv(pos_encoders_dict, data_callback=SDM_eval.get_data_geoplant_corrected,save_name="results/AUC/TEST.csv",do_pca=False)
 
 
 # evaluate_checkpoints(model_geoclip_pos_enc,

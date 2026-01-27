@@ -28,7 +28,6 @@ import torch.nn as nn
 import torch
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
-import os
 import json
 from datetime import datetime
 from torchinfo import summary
@@ -36,6 +35,8 @@ import utils
 import numpy as np
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
+import wandb
+from pytorch_lightning.loggers import WandbLogger
 
 # import heartrate
 # heartrate.trace(browser=False, port=9999)
@@ -146,6 +147,19 @@ if __name__ == "__main__":
     #k=256 #number of species to keep. 256 is about 40% on the dataset
     fourier_dim=3*512
 
+    #wandb
+    os.environ['WANDB_API_KEY'] = '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'
+    wandb.init(
+    project="contrastive_learning",   # Replace with your project name
+    entity="adammenoud",         # Replace with your W&B username or team
+    name=save_name   # Optional: name your run
+    )
+    wandb_logger = WandbLogger(
+    project="contrastive_learning",
+    entity="adammenoud",
+    name=save_name,
+)
+
     dictionary=pd.read_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioclip_data_dictionary_all_taxons")
     #dataset=data_extraction.dictionary_data(dictionary)
     train_dataloader, test_dataloader =utils.dataloader_emb(data_path,batch_size=batch_size, shuffle=True,train_ratio=0.8, sort_duplicates=True, dictionary=dictionary)
@@ -175,8 +189,8 @@ if __name__ == "__main__":
                     save_name=save_name,
                     lr=1e-4,
                     loss=F.cross_entropy,
-                    name_training_loss="Cross-entropy", 
-                    name_val_loss="CE on test set"
+                    name_training_loss="Cross-entropy training", 
+                    name_val_loss="Cross-entropy validation"
                     )
     checkpoint_cb = ModelCheckpoint(
     dirpath=f"/home/adam/source/CLIP/Model_saves/{save_name}",
@@ -190,7 +204,8 @@ if __name__ == "__main__":
                     default_root_dir=f"experiments/{save_name}", 
                     log_every_n_steps=1,
                     callbacks=[checkpoint_cb],
-                    limit_val_batches=10)  
+                    limit_val_batches=10,
+                    logger=wandb_logger)  
     trainer.fit(
         model,
         train_dataloader,

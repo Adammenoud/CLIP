@@ -85,9 +85,9 @@ def get_embeddings(coords, pos_encoder, device="cuda"):
         emb = pos_encoder(coords).cpu().numpy()
     return emb
 
-def get_data_NCEAS(po_data_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItrain_po.csv", 
-                   pa_csv_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItest_pa.csv", 
-                   env_csv_path="embeddings_data_and_dictionaries/data_SDM_NCEAS/SWItest_env.csv",
+def get_data_NCEAS(po_data_path="Data/data_SDM_NCEAS/SWItrain_po.csv", 
+                   pa_csv_path="Data/data_SDM_NCEAS/SWItest_pa.csv", 
+                   env_csv_path="Data/data_SDM_NCEAS/SWItest_env.csv",
                    species_columns=[
                                     'swi01','swi02','swi03','swi04','swi05','swi06','swi07','swi08','swi09','swi10',
                                     'swi11','swi12','swi13','swi14','swi15','swi16','swi17','swi18','swi19','swi20',
@@ -133,8 +133,8 @@ def get_data_NCEAS(po_data_path="embeddings_data_and_dictionaries/data_SDM_NCEAS
     return X_cov, y,coords_po, X_test_cov, y_test , coords_pa
 
 def get_data_geoplant(
-    po_csv_path="embeddings_data_and_dictionaries/filtered_geoplant/geoplant_po_france_withcovs.csv",
-    pa_csv_path="embeddings_data_and_dictionaries/filtered_geoplant/geoplant_pa_france_withcovs.csv",
+    po_csv_path="Data/filtered_geoplant/geoplant_po_france_withcovs.csv",
+    pa_csv_path="Data/filtered_geoplant/geoplant_pa_france_withcovs.csv",
         ):
     """
         The covariates come form AlphaEarth, and the data form Geoplant (see /filtered_geoplant/filter_geoplant.py). 
@@ -166,6 +166,39 @@ def get_data_geoplant(
     X_test_cov = pa.loc[:, covariate_columns].to_numpy()
     y_true = pa.loc[:, species_columns].to_numpy()
     coords_pa = pa.loc[:, [lat_col, lon_col]].to_numpy()
+
+    return X_cov, y, coords_po, X_test_cov, y_true, coords_pa
+
+
+def get_data_geoplant_corrected(
+                X_po_path="Data/geoplant_corrected/X_po_france_covs.csv",
+                y_po_path="Data/geoplant_corrected/Y_po_france.csv",
+
+                X_pa_path="Data/geoplant_corrected/X_pa_france_covs.csv",
+                y_pa_path="Data/geoplant_corrected/Y_pa_france.csv",
+                #X : lont lat + Covs
+                #y : species
+                
+        ):
+    X_po=pd.read_csv(X_po_path)
+    y_po=pd.read_csv(y_po_path)
+
+    X_pa=pd.read_csv(X_pa_path)
+    y_pa=pd.read_csv(y_pa_path)
+
+    covariate_columns = [c for c in X_po.columns if c.startswith("A")]
+    lon_col = "lon"
+    lat_col = "lat"
+
+    #Po
+    X_cov=X_po.loc[:, covariate_columns].to_numpy()
+    y=y_po.to_numpy()
+    coords_po = X_po.loc[:, [lat_col, lon_col]].to_numpy()
+
+    #Pa
+    X_test_cov=X_pa.loc[:, covariate_columns].to_numpy()
+    y_true=y_pa.to_numpy()
+    coords_pa = X_pa.loc[:, [lat_col, lon_col]].to_numpy()
 
     return X_cov, y, coords_po, X_test_cov, y_true, coords_pa
 

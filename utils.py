@@ -96,31 +96,34 @@ def dataloader_emb(file_path,batch_size,shuffle=False,train_proportion=0.8): #fr
     return train_loader, test_loader
     '''
 
-def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=False, dictionary=None,drop_last=True, dataset="HDF5_dataset"): #from a h5 file
+def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=False, dictionary=None,drop_last=True, dataset_type="HDF5_dataset", vectors_name="vectors"): #from a h5 file
     '''solves to the duplication problem, but need to take a dictionary with gbifID column.'''
-    if dataset == "HDF5_dataset":
-        dataset=data_extraction.HDF5Dataset(file_path)
-    elif dataset == "ordered_HDF5Dataset":
-        dataset=data_extraction.ordered_HDF5Dataset(file_path)
+    if dataset_type == "HDF5_dataset":
+        dataset=data_extraction.HDF5Dataset(file_path,data_name=vectors_name)
+    elif dataset_type == "ordered_HDF5Dataset":
+        dataset=data_extraction.ordered_HDF5Dataset(file_path,dictionary,data_name=vectors_name)
 
     train_size = int(train_ratio * len(dataset))
     test_size = len(dataset) - train_size
 
     generator = torch.Generator().manual_seed(48)
     if sort_duplicates:
-        train_dataset, test_dataset=group_split(dataset,file_path, dictionary,generator, train_ratio)
+        if dataset_type == "HDF5_dataset":
+            with h5py.File(file_path, "r") as f:
+                dict_indices = f["dict_idx"][:].flatten()
+        elif dataset_type == "ordered_HDF5Dataset":
+            dict_indices = dataset.dictionary.index
+        train_dataset, test_dataset=group_split(dataset,dict_indices, dictionary,generator, train_ratio)
     else:
         train_dataset, test_dataset = random_split(dataset, [train_size, test_size],generator=generator)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle,drop_last=drop_last)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle,drop_last=drop_last)
     return train_loader, test_loader
-def group_split(dataset, file_path, dictionary,generator, train_ratio=0.8):
+def group_split(dataset, dict_indices, dictionary,generator, train_ratio=0.8):
     """Split dataset into train/test SUCH THAT samples with the same ID stay together.
     Technically, there may be some variance to the training set proportion since not all Gbif indices have the same number of images."""
     n = len(dataset)
-    with h5py.File(file_path, "r") as f:
-        dict_indices = f["dict_idx"][:].flatten()
     # 1 — Extract IDs for each sample
     ids = dictionary.loc[dict_indices, "gbifID"].values  
     # 2 — Convert unique IDs to integers
@@ -463,7 +466,7 @@ def map_image(doublenetwork, path_to_image, country="Switzerland", device="cuda"
     
 
 def embedds_image(image, device="cuda"):
-    '''Fetches the model every time: only for plots or exeptinal use, do not call repeatedly!'''
+    '''Fetches the model every time: only for plots or exceptional use, do not call repeatedly!'''
     bioclip, preprocess_train, processor = open_clip.create_model_and_transforms('hf-hub:imageomics/bioclip-2')
     image= processor(image).unsqueeze(0).to(device)
     bioclip = bioclip.to(device)

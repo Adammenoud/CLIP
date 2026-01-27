@@ -175,6 +175,11 @@ def filter_France_and_taxa(chunk, mushrooms):
             chunk = chunk[(chunk['phylum'] == 'Arthropoda')]
         return chunk
 
+def filter_France_and_plants(chunk):
+    chunk = chunk.dropna()
+    chunk = chunk[chunk['countryCode']=="FR"]
+    chunk = chunk[chunk['kingdom'] == 'Plantae']
+    return chunk
 def equalize_dataframes(file_to_filter, reference_file, column ,sep="\t", output_dir=None,chunksize=1_000_000):
     '''
     Creates a copy of a large file (without loading into memory), from a reference file (that should fit in memory).
@@ -211,26 +216,32 @@ def equalize_dataframes(file_to_filter, reference_file, column ,sep="\t", output
         )
         write_header = False
     
-occ_path="embeddings_data_and_dictionaries/data_inaturalist/occurrence.txt"
-mult_path="embeddings_data_and_dictionaries/data_inaturalist/multimedia.txt"
+occ_path="Data/data_inaturalist/occurrence.txt"
+mult_path="Data/data_inaturalist/multimedia.txt"
 taxa_cols= ['kingdom','phylum','class', 'order','family','genus','species']
 columns= taxa_cols + ['gbifID','countryCode',"scientificName", "decimalLatitude", "decimalLongitude"]
 
 #Create the occurence files we need         
-print("filter mushrooms")
-get_filtered_copy(occ_path, filter_France_and_taxa, chunksize=1_000_000,sep="\t", usecols=columns, output_path="embeddings_data_and_dictionaries/filtered_inaturalist/occurrence_mushrooms.txt",mushrooms=True)
-print("filter arthropods")
-get_filtered_copy(occ_path, filter_France_and_taxa, chunksize=1_000_000,sep="\t", usecols=columns, output_path="embeddings_data_and_dictionaries/filtered_inaturalist/occurrence_arthropods.txt",mushrooms=False)
-
+# print("filter mushrooms")
+# get_filtered_copy(occ_path, filter_France_and_taxa, chunksize=1_000_000,sep="\t", usecols=columns, output_path="embeddings_data_and_dictionaries/filtered_inaturalist/occurrence_mushrooms.txt",mushrooms=True)
+# print("filter arthropods")
+# get_filtered_copy(occ_path, filter_France_and_taxa, chunksize=1_000_000,sep="\t", usecols=columns, output_path="embeddings_data_and_dictionaries/filtered_inaturalist/occurrence_arthropods.txt",mushrooms=False)
+# print("filter plants")
+# get_filtered_copy(occ_path, filter_France_and_plants, chunksize=1_000_000,sep="\t", usecols=columns, output_path="Data/filtered_inaturalist/occurrence_plants.txt")
 
 #Create the corresponding mutlimedia files
-equalize_dataframes(file_to_filter=mult_path, 
-                    reference_file="embeddings_data_and_dictionaries/filtered_inaturalist/occurrence_arthropods.txt",
-                    column='gbifID',
-                    output_dir="embeddings_data_and_dictionaries/filtered_inaturalist/multimedia_arthropods.txt"
-                    )
-equalize_dataframes(file_to_filter=mult_path, 
-                    reference_file="embeddings_data_and_dictionaries/filtered_inaturalist/occurrence_mushrooms.txt",
-                    column='gbifID',
-                    output_dir="embeddings_data_and_dictionaries/filtered_inaturalist/multimedia_mushrooms.txt"
-                    )
+# equalize_dataframes(file_to_filter=mult_path, 
+#                     reference_file="embeddings_data_and_dictionaries/filtered_inaturalist/occurrence_arthropods.txt",
+#                     column='gbifID',
+#                     output_dir="embeddings_data_and_dictionaries/filtered_inaturalist/multimedia_arthropods.txt"
+#                     )
+# equalize_dataframes(file_to_filter=mult_path, 
+#                     reference_file="embeddings_data_and_dictionaries/filtered_inaturalist/occurrence_mushrooms.txt",
+#                     column='gbifID',
+#                     output_dir="embeddings_data_and_dictionaries/filtered_inaturalist/multimedia_mushrooms.txt"
+#                     )
+# equalize_dataframes(file_to_filter=mult_path, 
+#                     reference_file="Data/filtered_inaturalist/occurrence_plants.txt",
+#                     column='gbifID',
+#                     output_dir="Data/filtered_inaturalist/multimedia_plants.txt"
+#                     )

@@ -13,7 +13,6 @@ from torch.utils.tensorboard import SummaryWriter
 import pandas as pd
 from torchinfo import summary
 import sys
-import wandb
 #local:
 import utils
 import nn_classes
@@ -24,8 +23,8 @@ import SDM_eval
 #geoclip
 from geoclip import LocationEncoder, GeoCLIP
 
-# import heartrate
-# heartrate.trace(browser=False, port=9999)
+import os
+import wandb
 
 #seed
 np.random.seed(48)
@@ -33,18 +32,22 @@ torch.manual_seed(48)
 #--------------------------------------------------------------------------------------
 
 
-wandb.init(project="contrastive_learning"
-           
-           
-           )
 nbr_epochs=120
 device="cuda"
 batch_size=4096 #"We use batch size |B| as 512 when training on full dataset. For data-efficient settings with 20%, 10%, and 5% of the data, we use |B| as 256, 256, and 128 respectively"
-save_name="to_delete_test_compute"
+save_name="Test_wandb_logging"
 data_path="Embeddings_and_dictionaries/arthropods/embeddings_inaturalist_FR_arthropods.h5"
 #data_path="embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/difference_embeddings.h5"
 #"embeddings_data_and_dictionaries/Embeddings/swiss_bioclip_embeddings/swiss_data_bioclip.h5"
 
+
+#wandb
+os.environ['WANDB_API_KEY'] = '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'
+wandb.init(
+    project="contrastive_learning",
+    entity="adammenoud",       
+    name=save_name           
+)
 
 #Fetching data: see "data_extraction.py"
 
@@ -63,15 +66,17 @@ dataloader, test_dataloader =utils.dataloader_emb(data_path,
                                                   sort_duplicates=True, 
                                                   dictionary=dictionary,
                                                   drop_last=True,
-                                                  dataset="ordered_HDF5Dataset"
+                                                  dataset_type="ordered_HDF5Dataset",
+                                                  vectors_name="vectors_bioclip"
                                                   )
-dim_hidden=768
-dim_output=512
-image_encoder=nn.Sequential( nn.Linear(768, dim_hidden),nn.ReLU(),nn.Linear(dim_hidden, dim_output) )
-model= GeoCLIP(from_pretrained=False,queue_size=1)
-model.image_encoder=image_encoder
+model=nn_classes.DoubleNetwork_V2(LocationEncoder(from_pretrained=False))
 
 
+
+
+# wandb.init(project="contrastive_learning",
+#            name=save_name
+#            )
 
 print("training")
 model=train.train(
@@ -96,7 +101,7 @@ model=train.train(
 
 #tensorboard --logdir=runs
 #https://www.gbif.org/occurrence/
-#CUDA_VISIBLE_DEVICES=1 python train.py
-#CUDA_VISIBLE_DEVICES=1 python -m pdb your_script.py
+#CUDA_VISIBLE_DEVICES=1 python main.py
+#CUDA_VISIBLE_DEVICES=1 python -m pdb main.py
 
 

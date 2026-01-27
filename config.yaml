@@ -1,0 +1,91 @@
+# ----------------------------
+# Dataset and embeddings
+# ----------------------------
+dataset: arthropods          # Default, overridden by sweep
+vectors_name: vectors_bioclip # Default, overridden by sweep
+drop_high_freq: true         # Default, overridden by sweep
+
+
+shuffle: True
+train_ratio: 0.8
+sort_duplicates: True 
+drop_last: True
+dataset_type: "ordered_HDF5Dataset"
+
+paths:
+  arthropods:
+    data: Embeddings_and_dictionaries/arthropods/embeddings_inaturalist_FR_arthropods.h5
+    dict: Embeddings_and_dictionaries/arthropods/dictionary_inaturalist_FR_arthropods
+  mushrooms:
+    data: Embeddings_and_dictionaries/mushrooms/embeddings_inaturalist_FR_mushrooms.h5
+    dict: Embeddings_and_dictionaries/mushrooms/dictionary_inaturalist_FR_mushrooms
+  plants:
+    data: ""  # Update after download
+    dict: Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants
+
+# ----------------------------
+# Model
+# ----------------------------
+model_name: contrastive       # Default, overridden by sweep
+
+# ----------------------------
+# Training hyperparameters
+# ----------------------------
+training:
+  epochs: 120
+  batch_size: 4096
+  lr: 0.0001                
+  device: cuda
+  saving_frequency: 1
+  nbr_checkpoints: 30
+  test_frequency: 1
+  nbr_tests: 10
+  modalities: #yaml list, will be loaded as a python list
+    - images
+    - coords
+  pretrained_geoclip_encoder: False
+
+# ----------------------------
+# Optional: save name pattern
+# ----------------------------
+save_name: "test_yaml_config"
+wandb:
+  project: contrastive_learning
+  entity: adammenoud
+
+
+
+
+#pip install pyyaml
+# import yaml
+
+#parse arguments: 
+
+# config_path = sys.argv[1]
+# with open(config_path, "r") as f:
+#     cfg = yaml.safe_load(f)
+#Then
+#nbr_epochs = cfg["training"]["nbr_epochs"]
+
+#command to run: python train.py config.yaml
+
+
+
+
+#If manual bash script:
+# for lr in 1e-3 1e-4 5e-5; do
+#   for bs in 1024 2048 4096; do
+#     python train.py \
+#       --config configs/arthropods.yaml \
+#       --lr $lr \
+#       --batch_size $bs
+#   done
+# done
+# In Python:
+
+# python
+# Copier le code
+# if args.lr is not None:
+#     cfg["training"]["lr"] = args.lr
+# if args.batch_size is not None:
+#     cfg["dataset"]["batch_size"] = args.batch_size 
