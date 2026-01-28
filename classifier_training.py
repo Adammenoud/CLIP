@@ -69,7 +69,7 @@ class GeneralLoop(L.LightningModule):
         return loss
     
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(model.parameters(),lr=self.lr)
+        optimizer = torch.optim.AdamW(self.model.parameters(),lr=self.lr)
         return optimizer
     
     def validation_step(self, batch):
@@ -81,25 +81,10 @@ class GeneralLoop(L.LightningModule):
         return loss
     
     def on_train_epoch_end(self):
-        '''Implemented manually for consistenyy with previous saves'''
+        '''Implemented manually for consistency with previous saves'''
         os.makedirs(self.save_name, exist_ok=True)
         torch.save(self.model.state_dict(), os.path.join(self.save_name, f"model.pt")) #overwrites the same file, so to avoid getting floded by saves
         torch.save(self.optimizers().state_dict(), os.path.join(self.save_name, "optim.pt"))
-        # hparams = {                             #json
-        #         "save_name" : save_name,
-        #         "saving_frequency" : saving_frequency,
-        #         "learning_rate": lr,
-        #         "batch_size": batch_size,
-        #         "epochs": epochs,
-        #         "current epoch (if stopped)" : ep,
-        #         "saving_frequency":saving_frequency,
-        #         "nbr_checkppoints":nbr_checkppoints, 
-        #         "test_frequency":test_frequency,
-        #         "nbr_tests": nbr_tests}
-        # config_path = os.path.join(save_name, "hyperparameters.json")
-        # with open(config_path, "w") as f:
-        #     json.dump(hparams, f, indent=4)
-    
     def every_n_epochs(self):
         pass #Checkpoints?
       
@@ -134,80 +119,8 @@ class Classifier_train(GeneralLoop):
 
 
 
-#seed
-np.random.seed(48)
-torch.manual_seed(48)
 #--------------------------------------------------------------------------------------
 if __name__ == "__main__":
-    nbr_epochs=50
-    device="cuda"
-    batch_size=64
-    save_name="classifier_gaussian_enc"
-    data_path="embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioCLIP_full_dataset_embeddings.h5"
-    #k=256 #number of species to keep. 256 is about 40% on the dataset
-    fourier_dim=3*512
+ pass
 
-    #wandb
-    os.environ['WANDB_API_KEY'] = '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'
-    wandb.init(
-    project="contrastive_learning",   # Replace with your project name
-    entity="adammenoud",         # Replace with your W&B username or team
-    name=save_name   # Optional: name your run
-    )
-    wandb_logger = WandbLogger(
-    project="contrastive_learning",
-    entity="adammenoud",
-    name=save_name,
-)
-
-    dictionary=pd.read_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioclip_data_dictionary_all_taxons")
-    #dataset=data_extraction.dictionary_data(dictionary)
-    train_dataloader, test_dataloader =utils.dataloader_emb(data_path,batch_size=batch_size, shuffle=True,train_ratio=0.8, sort_duplicates=True, dictionary=dictionary)
-
-    #filter: keeps to k species:
-    # species_counts = dictionary['scientificName'].value_counts()
-    # top_species = species_counts.head(k).index
-    # dictionary = dictionary[dictionary['scientificName'].isin(top_species)]
-
-
-    class_name="scientificName"
-    n_species=len(dictionary[class_name].unique())
-
-
-
-    model = nn.Sequential(
-        nn_classes.MultilGaussianEncoding(),
-        nn_classes.MLP(
-            in_dim=fourier_dim,
-            hidden=[256, 256, 256],
-            out_dim=n_species,
-        )
-    )
-
-    model=Classifier_train(model=model,
-                    dictionary=dictionary,
-                    save_name=save_name,
-                    lr=1e-4,
-                    loss=F.cross_entropy,
-                    name_training_loss="Cross-entropy training", 
-                    name_val_loss="Cross-entropy validation"
-                    )
-    checkpoint_cb = ModelCheckpoint(
-    dirpath=f"/home/adam/source/CLIP/Model_saves/{save_name}",
-    filename=f"{save_name}_checkpoint_{{epoch}}", 
-    save_top_k=-1,  # save all epochs; use 1 if you only want the best
-    )
-
-    trainer= L.Trainer(max_epochs=nbr_epochs, 
-                    accelerator=device, 
-                    devices=1, 
-                    default_root_dir=f"experiments/{save_name}", 
-                    log_every_n_steps=1,
-                    callbacks=[checkpoint_cb],
-                    limit_val_batches=10,
-                    logger=wandb_logger)  
-    trainer.fit(
-        model,
-        train_dataloader,
-        test_dataloader,
-    )
+    

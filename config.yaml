@@ -15,18 +15,17 @@ dataset_type: "ordered_HDF5Dataset"
 paths:
   arthropods:
     data: Embeddings_and_dictionaries/arthropods/embeddings_inaturalist_FR_arthropods.h5
+    specie_data: Embeddings_and_dictionaries/arthropods/species_embeddings_inaturalist_FR_arthropods.h5
     dict: Embeddings_and_dictionaries/arthropods/dictionary_inaturalist_FR_arthropods
   mushrooms:
     data: Embeddings_and_dictionaries/mushrooms/embeddings_inaturalist_FR_mushrooms.h5
+    specie_data: Embeddings_and_dictionaries/mushrooms/species_embeddings_inaturalist_FR_mushrooms.h5
     dict: Embeddings_and_dictionaries/mushrooms/dictionary_inaturalist_FR_mushrooms
   plants:
-    data: "Embeddings_and_dictionaries/plants/embeddings_inaturalist_FR_plants.h5"
+    data: Embeddings_and_dictionaries/plants/embeddings_inaturalist_FR_plants.h5
+    specie_data: Embeddings_and_dictionaries/plants/species_embeddings_inaturalist_FR_plants.h5
     dict: Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants
 
-# ----------------------------
-# Model
-# ----------------------------
-model_name: contrastive       # Default, overridden by sweep
 
 # ----------------------------
 # Training hyperparameters
@@ -40,53 +39,31 @@ training:
   nbr_checkpoints: 30
   test_frequency: 1
   nbr_tests: 10
-  modalities: #yaml list, will be loaded as a python list
-    - images
-    - coords
-  pretrained_geoclip_encoder: False
+  
+# ----------------------------
+# Model
+# ----------------------------
+model_name: contrastive
+
+model_params:
+  contrastive:
+    modalities: #yaml list, will be loaded as a python list
+      - images
+      - coords
+    pretrained_geoclip_encoder: False
+  classifier:
+    class_column: species
+    loss: "cross_entropy"
+    encoded_size: 256  #encoding dimension for each sigma frequency
+    hidden_layers: [256, 256, 256]
+    n_species: None
 
 # ----------------------------
 # Optional: save name pattern
 # ----------------------------
 run_name: "test_sweep"
-param_to_concatenate:
 wandb:
   project: contrastive_learning
   entity: adammenoud
 
 
-
-
-#pip install pyyaml
-# import yaml
-
-#parse arguments: 
-
-# config_path = sys.argv[1]
-# with open(config_path, "r") as f:
-#     cfg = yaml.safe_load(f)
-#Then
-#nbr_epochs = cfg["training"]["nbr_epochs"]
-
-#command to run: python train.py config.yaml
-
-
-
-
-#If manual bash script:
-# for lr in 1e-3 1e-4 5e-5; do
-#   for bs in 1024 2048 4096; do
-#     python train.py \
-#       --config configs/arthropods.yaml \
-#       --lr $lr \
-#       --batch_size $bs
-#   done
-# done
-# In Python:
-
-# python
-# Copier le code
-# if args.lr is not None:
-#     cfg["training"]["lr"] = args.lr
-# if args.batch_size is not None:
-#     cfg["dataset"]["batch_size"] = args.batch_size 

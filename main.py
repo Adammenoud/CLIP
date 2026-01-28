@@ -1,21 +1,17 @@
 #imports:
 import numpy as np
-from PIL import Image
-import matplotlib.pyplot as plt
-from torchvision import models
-import torchvision
-from torch.utils.data import DataLoader
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
-import math
-from torch.utils.tensorboard import SummaryWriter
 import pandas as pd
 from torchinfo import summary
 import sys
 import wandb
 import os
 import yaml
+import lightning as L
+from lightning.pytorch.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import WandbLogger
 #local:
 import utils
 import nn_classes
@@ -23,6 +19,7 @@ import data_extraction
 import hdf5
 import train
 import SDM_eval
+import classifier_training
 #geoclip
 from geoclip import LocationEncoder, GeoCLIP
 
@@ -92,30 +89,80 @@ if cfg.drop_high_freq:
 else:
     sigma=[2**0, 2**4, 2**8]
 
+
 if cfg.model_name=="contrastive":
-    model=nn_classes.DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=cfg.training['pretrained_geoclip_encoder']))
+    model_cfg = cfg.model_params['contrastive']
+    model=nn_classes.DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=model_cfg['pretrained_geoclip_encoder']))
+    print("training")
+    model=train.train(
+                model,
+                epochs=cfg.training['epochs'],
+                dataloader=dataloader,
+                batch_size=cfg.training['batch_size'],
+                lr=cfg.training['lr'],    
+                device=cfg.training['device'],
+                save_name=run_name,
+                saving_frequency=cfg.training['saving_frequency'],
+                nbr_checkppoints=cfg.training['nbr_checkpoints'], 
+                test_dataloader=test_dataloader,
+                test_frequency=cfg.training['test_frequency'],
+                nbr_tests=cfg.training['nbr_tests'],
+                modalities=model_cfg['modalities'], 
+                dictionary=dictionary,  #if one wants to use a different dictionary in the "species" case
+                )
+if cfg.model_name== "classifier":
+    model_cfg = cfg.model_params['classifier']
+    if model_cfg['loss'] == "cross_entropy":
+        loss=F.cross_entropy
+    if model_cfg['n_species'] is None:
+        n_species=len(dictionary[model_cfg['class_column']].unique())
+    else:
+        pass #could filter species here, maybe later
+    #wandb
+    wandb_logger = WandbLogger(
+    project=static_cfg['wandb']['project'],
+    entity=static_cfg['wandb']['entity'],
+    name=run_name)
+    #model
+    model = nn.Sequential(
+                nn_classes.MultilGaussianEncoding(encoded_size=model_cfg['encoded_size'],sigma=sigma),
+                nn_classes.MLP(
+                    in_dim=len(sigma)*model_cfg['encoded_size'],
+                    hidden=model_cfg['hidden_layers'],
+                    out_dim=n_species  
+                    )
+    )
+    #(put model in wrapper)
+    model=classifier_training.Classifier_train(model=model,
+                    dictionary=dictionary,
+                    save_name=f"Model_saves/{run_name}",
+                    lr=cfg.training['lr'],
+                    loss=loss,
+                    name_training_loss=f"{model_cfg['loss']} training", 
+                    name_val_loss=f"{model_cfg['loss']} validation"
+                    )
+    #checkpoints
+    checkpoint_cb = ModelCheckpoint(
+                            dirpath=f"Model_saves/{run_name}/checkpoints",
+                            filename=f"{run_name}_checkpoint_{{epoch}}", 
+                            save_top_k=-1,  # save all epochs; use 1 for only the best
+                            )
+    #trainer
+    trainer= L.Trainer(max_epochs=cfg.training['epochs'], 
+                    accelerator=cfg.training['device'], 
+                    devices=1, 
+                    default_root_dir=f"Model_saves/{run_name}",   # overwritten by checkpoints?
+                    log_every_n_steps=cfg.training['test_frequency'],
+                    callbacks=[checkpoint_cb],
+                    limit_val_batches=cfg.training['nbr_tests'],
+                    logger=wandb_logger,
+                    deterministic=True
+                    )  
+    #train
+    trainer.fit(model,dataloader,test_dataloader,)
+
 else:
-    raise Exception(f"invalid model_name: found '{cfg.model_name}' instead of 'contrastive'")
-
-
-
-print("training")
-model=train.train(
-            model,
-            epochs=cfg.training['epochs'],
-            dataloader=dataloader,
-            batch_size=cfg.training['batch_size'],
-            lr=cfg.training['lr'],    
-            device=cfg.training['device'],
-            save_name=run_name,
-            saving_frequency=cfg.training['saving_frequency'],
-            nbr_checkppoints=cfg.training['nbr_checkpoints'], 
-            test_dataloader=test_dataloader,
-            test_frequency=cfg.training['test_frequency'],
-            nbr_tests=cfg.training['nbr_tests'],
-            modalities=cfg.training['modalities'], 
-            dictionary=dictionary,  #if one wants to use a different dictionary in the "species" case
-            )
+    raise Exception(f"invalid model_name: found '{cfg.model_name}' instead of 'contrastive' or 'classifier' ")
 
 
 #tensorboard --logdir=runs
