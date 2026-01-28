@@ -22,6 +22,7 @@ import regionmask
 import rasterio
 import open_clip
 import pandas as pd
+import wandb
 
 
 def noise(input, std):
@@ -607,3 +608,20 @@ def get_example(dataset_path, idx):
     dataset=data_extraction.HDF5Dataset(dataset_path)
     emb_vector, coord , idx = dataset[idx]
     return emb_vector, coord, idx
+
+
+def get_run_name(base_name, cfg, sweep_keys):
+    '''
+    returns the base name with the parameters concatenated
+    '''
+    if wandb.run.sweep_id is None:
+        return base_name
+    
+    parts = [base_name]
+    for key in sweep_keys:
+        val = cfg[key]
+        if isinstance(val, bool):
+            parts.append(f"{key}_{val}")
+        else:
+            parts.append(str(val))
+    return "_".join(parts)

@@ -288,7 +288,7 @@ class DoubleNetwork_V2(nn.Module):
         
         image_emb = image_emb / image_emb.norm(dim=1, keepdim=True)
         pos_emb = pos_emb / pos_emb.norm(dim=1, keepdim=True)
-        # Compute cosine similarity (dot product here)
+        # Compute cosine similarity (dot product here, since vectors are normalized)
         logits = image_emb @ pos_emb.t()*self.logit_scale.exp()
         return logits
     

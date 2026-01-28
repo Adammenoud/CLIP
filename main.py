@@ -13,6 +13,9 @@ from torch.utils.tensorboard import SummaryWriter
 import pandas as pd
 from torchinfo import summary
 import sys
+import wandb
+import os
+import yaml
 #local:
 import utils
 import nn_classes
@@ -23,85 +26,101 @@ import SDM_eval
 #geoclip
 from geoclip import LocationEncoder, GeoCLIP
 
-import os
-import wandb
-
 #seed
 np.random.seed(48)
 torch.manual_seed(48)
 #--------------------------------------------------------------------------------------
-
-
-nbr_epochs=120
-device="cuda"
-batch_size=4096 #"We use batch size |B| as 512 when training on full dataset. For data-efficient settings with 20%, 10%, and 5% of the data, we use |B| as 256, 256, and 128 respectively"
-save_name="Test_wandb_logging"
-data_path="Embeddings_and_dictionaries/arthropods/embeddings_inaturalist_FR_arthropods.h5"
-#data_path="embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/difference_embeddings.h5"
-#"embeddings_data_and_dictionaries/Embeddings/swiss_bioclip_embeddings/swiss_data_bioclip.h5"
-
-
+#static hyperparameters:
+with open("config.yaml") as f:
+    static_cfg = yaml.safe_load(f)
+#sweep hyperparameters:
 #wandb
-os.environ['WANDB_API_KEY'] = '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'
-wandb.init(
-    project="contrastive_learning",
-    entity="adammenoud",       
-    name=save_name           
+os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY')
+
+
+run = wandb.init(
+    project = static_cfg['wandb']['project'],
+    entity  = static_cfg['wandb']['entity'],
+    config=static_cfg,
+    name=static_cfg['run_name']
 )
+cfg = wandb.config  # static defaults + sweep overrides
 
-#Fetching data: see "data_extraction.py"
+# Get the run_name for checkpoints and tensorflow
+#gets the parameters of the sweep, concatenate to the default name (if using wandb sweep)
+with open("config_sweep.yaml") as f:
+    sweep_cfg = yaml.safe_load(f)
+
+sweep_keys = sweep_cfg["parameters"].keys()
+run_name = utils.get_run_name(static_cfg["run_name"], cfg, sweep_keys)
+wandb.run._set_name(run.name) #same format on wandb
 
 
 
-#"embeddings_data_and_dictionaries/Embeddings/swiss_bioclip_embeddings/swiss_dictionary"
-dictionary=pd.read_csv("Embeddings_and_dictionaries/arthropods/dictionary_inaturalist_FR_arthropods")
 
+
+# Get dataset paths directly from YAML
+dataset = cfg.dataset
+try:
+    data_path = static_cfg['paths'][dataset]['data']
+    dict_path = static_cfg['paths'][dataset]['dict']
+except KeyError:
+    raise ValueError(f"Dataset '{dataset}' not found in config paths section.")
+
+#reads group from sweep_config
+if hasattr(cfg, "group_name"):
+    wandb.run.group = cfg.group_name
+
+
+
+
+dictionary=pd.read_csv(dict_path)
 
 
 print("spliting data")
 dataloader, test_dataloader =utils.dataloader_emb(data_path,
-                                                  batch_size=batch_size, 
-                                                  shuffle=True,
-                                                  train_ratio=0.8, 
-                                                  sort_duplicates=True, 
+                                                  batch_size=cfg.training['batch_size'], 
+                                                  shuffle=cfg.shuffle,
+                                                  train_ratio=cfg.train_ratio, 
+                                                  sort_duplicates=cfg.sort_duplicates, 
                                                   dictionary=dictionary,
-                                                  drop_last=True,
-                                                  dataset_type="ordered_HDF5Dataset",
-                                                  vectors_name="vectors_bioclip"
+                                                  drop_last=cfg.drop_last,
+                                                  dataset_type=cfg.dataset_type,
+                                                  vectors_name=cfg.vectors_name
                                                   )
-model=nn_classes.DoubleNetwork_V2(LocationEncoder(from_pretrained=False))
+if cfg.drop_high_freq:
+    sigma=[2**0, 2**4]
+else:
+    sigma=[2**0, 2**4, 2**8]
+
+if cfg.model_name=="contrastive":
+    model=nn_classes.DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=cfg.training['pretrained_geoclip_encoder']))
+else:
+    raise Exception(f"invalid model_name: found '{cfg.model_name}' instead of 'contrastive'")
 
 
-
-
-# wandb.init(project="contrastive_learning",
-#            name=save_name
-#            )
 
 print("training")
 model=train.train(
             model,
-            nbr_epochs,
-            dataloader,
-            batch_size,
-            lr=1e-4,    
-            device="cuda",
-            save_name=save_name,
-            saving_frequency=1,
-            nbr_checkppoints=30,   ########
+            epochs=cfg.training['epochs'],
+            dataloader=dataloader,
+            batch_size=cfg.training['batch_size'],
+            lr=cfg.training['lr'],    
+            device=cfg.training['device'],
+            save_name=run_name,
+            saving_frequency=cfg.training['saving_frequency'],
+            nbr_checkppoints=cfg.training['nbr_checkpoints'], 
             test_dataloader=test_dataloader,
-            test_frequency=1,
-            nbr_tests=10,
-            modalities=["images","coords"], #either "images","coords","NCEAS" or "species"
-            dictionary=None,  #if one wants to use a different dictionary in the "species" case
+            test_frequency=cfg.training['test_frequency'],
+            nbr_tests=cfg.training['nbr_tests'],
+            modalities=cfg.training['modalities'], 
+            dictionary=dictionary,  #if one wants to use a different dictionary in the "species" case
             )
-
-
 
 
 #tensorboard --logdir=runs
 #https://www.gbif.org/occurrence/
 #CUDA_VISIBLE_DEVICES=1 python main.py
 #CUDA_VISIBLE_DEVICES=1 python -m pdb main.py
-
 

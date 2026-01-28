@@ -3,7 +3,7 @@
 # ----------------------------
 dataset: arthropods          # Default, overridden by sweep
 vectors_name: vectors_bioclip # Default, overridden by sweep
-drop_high_freq: true         # Default, overridden by sweep
+drop_high_freq: False         # Default, overridden by sweep
 
 
 shuffle: True
@@ -20,7 +20,7 @@ paths:
     data: Embeddings_and_dictionaries/mushrooms/embeddings_inaturalist_FR_mushrooms.h5
     dict: Embeddings_and_dictionaries/mushrooms/dictionary_inaturalist_FR_mushrooms
   plants:
-    data: ""  # Update after download
+    data: "Embeddings_and_dictionaries/plants/embeddings_inaturalist_FR_plants.h5"
     dict: Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants
 
 # ----------------------------
@@ -48,7 +48,8 @@ training:
 # ----------------------------
 # Optional: save name pattern
 # ----------------------------
-run_name: "corrected_temperature_gradient"
+run_name: "test_sweep"
+param_to_concatenate:
 wandb:
   project: contrastive_learning
   entity: adammenoud
