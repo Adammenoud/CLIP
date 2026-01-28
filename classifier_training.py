@@ -44,7 +44,7 @@ from pytorch_lightning.loggers import WandbLogger
 
 
 class GeneralLoop(L.LightningModule):
-    def __init__(self, model, loss, save_name ,name_training_loss="Cross-entropy", name_val_loss="CE on test set", lr=1e-4):
+    def __init__(self, model, loss, save_name ,name_training_loss="Cross-entropy training", name_val_loss="Cross-entropy validation", lr=1e-4):
         super().__init__()
         self.model=model
         self.lr=lr
@@ -176,7 +176,7 @@ if __name__ == "__main__":
 
 
     model = nn.Sequential(
-        nn_classes.AllGaussianEncoding(),
+        nn_classes.MultilGaussianEncoding(),
         nn_classes.MLP(
             in_dim=fourier_dim,
             hidden=[256, 256, 256],

@@ -16,6 +16,7 @@ from sklearn.preprocessing import StandardScaler
 import open_clip
 from geoclip import LocationEncoder
 
+
 def get_resnet(dim_emb, device="cuda"):
     model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1) #can also set weights to None
     num_features = model.fc.in_features
@@ -373,25 +374,55 @@ class GeneralCrossEntropyLoss(nn.Module):
         log_probs = torch.nn.functional.log_softmax(logits, dim=1)
         loss = -(target * log_probs).sum(dim=1).mean()
         return loss
-    
-from geoCLIP_classes import GaussianEncoding
+######-------RFF encoding, from the geoclip github
+def sample_b(sigma: float, size: tuple):
+    return torch.randn(size) * sigma
 
-class AllGaussianEncoding(nn.Module):
+def gaussian_encoding(v, b):
+    vp = 2 * np.pi * v @ b.T
+    return torch.cat((torch.cos(vp), torch.sin(vp)), dim=-1) 
+
+class GaussianEncoding(nn.Module):
+    """Layer for mapping coordinates using random Fourier features
+        More info about it (e.g. full docstring on the geoclip github)
+    """
+    def __init__(self, sigma = None,
+                 input_size = None,
+                 encoded_size = None,
+                 b  = None):
+        super().__init__()
+        if b is None:
+            if sigma is None or input_size is None or encoded_size is None:
+                raise ValueError(
+                    'Arguments "sigma," "input_size," and "encoded_size" are required.')
+
+            b = sample_b(sigma, (encoded_size, input_size))
+        elif sigma is not None or input_size is not None or encoded_size is not None:
+            raise ValueError('Only specify the "b" argument when using it.')
+        self.b = nn.parameter.Parameter(b, requires_grad=False)
+
+    def forward(self, v):
+        return gaussian_encoding(v, self.b)
+
+class MultilGaussianEncoding(nn.Module):
     """Layer for mapping coordinates using random Fourier features.
-        The dimension of output is encoded_size*3
+       The dimension of output is encoded_size * len(sigma)
     """
 
     def __init__(self,
                  input_size=2,
-                 encoded_size=256):
-        """
-        Args:
-        """
+                 encoded_size=256,
+                 sigma=[2**0, 2**4, 2**8]):
         super().__init__()
-        self.g1=GaussianEncoding(sigma = 2**0,input_size= input_size,encoded_size=encoded_size)
-        self.g2=GaussianEncoding(sigma = 2**4,input_size= input_size,encoded_size=encoded_size)
-        self.g3=GaussianEncoding(sigma = 2**8,input_size= input_size,encoded_size=encoded_size)
+
+        self.encoders = nn.ModuleList([
+            GaussianEncoding(
+                sigma=s,
+                input_size=input_size,
+                encoded_size=encoded_size
+            )
+            for s in sigma
+        ])
 
     def forward(self, x):
-        x=torch.cat((self.g1(x),self.g2(x),self.g3(x)), dim=1)
-        return x
+        return torch.cat([encoder(x) for encoder in self.encoders], dim=1)

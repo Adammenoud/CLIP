@@ -42,7 +42,6 @@ run = wandb.init(
     project = static_cfg['wandb']['project'],
     entity  = static_cfg['wandb']['entity'],
     config=static_cfg,
-    name=static_cfg['run_name']
 )
 cfg = wandb.config  # static defaults + sweep overrides
 
@@ -53,7 +52,7 @@ with open("config_sweep.yaml") as f:
 
 sweep_keys = sweep_cfg["parameters"].keys()
 run_name = utils.get_run_name(static_cfg["run_name"], cfg, sweep_keys)
-wandb.run._set_name(run.name) #same format on wandb
+run.name=run_name #same format on wandb
 
 
 
