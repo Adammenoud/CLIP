@@ -12,6 +12,7 @@ import yaml
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
+from pathlib import Path
 #local:
 import utils
 import nn_classes
@@ -50,18 +51,28 @@ with open("config_sweep.yaml") as f:
 sweep_keys = sweep_cfg["parameters"].keys()
 run_name = utils.get_run_name(static_cfg["run_name"], cfg, sweep_keys)
 run.name=run_name #same format on wandb
-
+cfg_dict = dict(cfg)
+#dumps the config
+file_path = Path(f"Model_saves/{run_name}/config.yaml")
+file_path.parent.mkdir(parents=True, exist_ok=True)
+with open(file_path, "w") as f:
+    yaml.dump(cfg_dict, f, default_flow_style=False)
 
 
 
 
 # Get dataset paths directly from YAML
 dataset = cfg.dataset
+if cfg.use_species:
+    data_type='specie_data'
+else:
+    data_type='data'
+
 try:
-    data_path = static_cfg['paths'][dataset]['data']
+    data_path = static_cfg['paths'][dataset][data_type]
     dict_path = static_cfg['paths'][dataset]['dict']
 except KeyError:
-    raise ValueError(f"Dataset '{dataset}' not found in config paths section.")
+    raise ValueError(f"Dataset '{dataset}' with '{data_type}' data type not found in config paths section.")
 
 #reads group from sweep_config
 if hasattr(cfg, "group_name"):
@@ -92,7 +103,7 @@ else:
 
 if cfg.model_name=="contrastive":
     model_cfg = cfg.model_params['contrastive']
-    model=nn_classes.DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=model_cfg['pretrained_geoclip_encoder']))
+    model=nn_classes.DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder']))
     print("training")
     model=train.train(
                 model,
@@ -125,13 +136,17 @@ if cfg.model_name== "classifier":
     name=run_name)
     #model
     model = nn.Sequential(
-                nn_classes.MultilGaussianEncoding(encoded_size=model_cfg['encoded_size'],sigma=sigma),
-                nn_classes.MLP(
-                    in_dim=len(sigma)*model_cfg['encoded_size'],
-                    hidden=model_cfg['hidden_layers'],
-                    out_dim=n_species  
+                LocationEncoder(sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder']),
+                nn.Linear(512,n_species)
                     )
-    )
+    # model = nn.Sequential(
+    #             nn_classes.MultilGaussianEncoding(encoded_size=model_cfg['encoded_size'],sigma=sigma),
+    #             nn_classes.MLP(
+    #                 in_dim=len(sigma)*model_cfg['encoded_size'],
+    #                 hidden=model_cfg['hidden_layers'],
+    #                 out_dim=n_species  
+    #                 )
+    # )
     #(put model in wrapper)
     model=classifier_training.Classifier_train(model=model,
                     dictionary=dictionary,

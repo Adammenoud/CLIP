@@ -14,23 +14,8 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.multioutput import MultiOutputClassifier
-
-
-class MLP(nn.Module):
-    def __init__(self, in_dim, hidden=[256, 256], out_dim=30):
-        super().__init__()
-        layers = []
-        prev = in_dim
-        for h in hidden:
-            layers.append(nn.Linear(prev, h))
-            layers.append(nn.ReLU())
-            prev = h
-        layers.append(nn.Linear(prev, out_dim))  # linear output
-        self.net = nn.Sequential(*layers)
-
-    def forward(self, x):
-        x=self.net(x)
-        return x
+import yaml
+from nn_classes import MLP
     
 def train_one_MLP(model, X, y, epochs=200, batch_size=250, lr=1e-4):
     model=model.to("cuda")
@@ -209,7 +194,7 @@ def train_models(
         hidden_size=[256, 256],
         epochs=200,
         train_MLP=True,
-        data_callback=get_data_NCEAS #must be deterministic (also called in eval)
+        data_callback=get_data_geoplant_corrected #must be deterministic (also called in eval)
 ):
     X_cov, y, coords_po, X_test_cov, y_true, coords_pa = data_callback()
     n_species = y.shape[1]
@@ -268,7 +253,7 @@ def evaluate_models(
     MLP_both,  #from train_one_MLP
     pca_model=None, #to lower dim of X_test_emb.
     train_MLP=True,
-    data_callback=get_data_NCEAS    
+    data_callback=get_data_geoplant_corrected    
 ):
     """
     Evaluation on PA data
@@ -442,3 +427,38 @@ if __name__ == "__main__":
         MLP_emb,  #from train_one_MLP
         pca_model=None, #to lower dim of X_test_emb.
         ) 
+
+def apply_model_with_config(base_path, params_to_read, callback, output_file="."):
+    """
+    base_path (str): Path to the folder containing config.yaml and model.pt
+    params_to_read (list): List of parameter keys to extract from config.yaml, e.g., ['training.batch_size']
+    callback (function): Function that takes a PyTorch model and returns something
+    output_file (str): Path to save the result of callback
+    """
+    config_path = os.path.join(base_path, 'config.yaml')
+    model_path = os.path.join(base_path, 'model.pt')
+
+    # Load config.yaml
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    # Function to get nested parameters
+    def get_nested(config_dict, key_path):
+        keys = key_path.split('.')
+        val = config_dict
+        for k in keys:
+            val = val[k]
+        return val
+
+    extracted_params = {param: get_nested(config, param) for param in params_to_read}
+    model = torch.load(model_path, map_location='cpu')
+
+    result = callback(model)
+
+    # Save
+    output_data = {
+    'extracted_params': extracted_params,
+    'result': result
+    }
+    torch.save(output_data, output_file)
+    print(f"Saved output to {output_file}")

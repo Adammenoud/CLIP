@@ -1,16 +1,15 @@
 # ----------------------------
 # Dataset and embeddings
 # ----------------------------
-dataset: arthropods          # Default, overridden by sweep
+dataset: plants          # Default, overridden by sweep
 vectors_name: vectors_bioclip # Default, overridden by sweep
-drop_high_freq: False         # Default, overridden by sweep
-
+use_species: False
 
 shuffle: True
 train_ratio: 0.8
 sort_duplicates: True 
 drop_last: True
-dataset_type: "ordered_HDF5Dataset"
+dataset_type: ordered_HDF5Dataset
 
 paths:
   arthropods:
@@ -30,13 +29,16 @@ paths:
 # ----------------------------
 # Training hyperparameters
 # ----------------------------
+drop_high_freq: False         # Default, overridden by sweep 
+
+
 training:
   epochs: 120
   batch_size: 4096
   lr: 0.0001                
   device: cuda
   saving_frequency: 1
-  nbr_checkpoints: 30
+  nbr_checkpoints: 120
   test_frequency: 1
   nbr_tests: 10
   
@@ -46,22 +48,23 @@ training:
 model_name: contrastive
 
 model_params:
+  pretrained_geoclip_encoder: False
+
   contrastive:
     modalities: #yaml list, will be loaded as a python list
       - images
       - coords
-    pretrained_geoclip_encoder: False
   classifier:
     class_column: species
     loss: "cross_entropy"
-    encoded_size: 256  #encoding dimension for each sigma frequency
-    hidden_layers: [256, 256, 256]
+    #encoded_size: 256  #encoding dimension for each sigma frequency
+    #hidden_layers: [256, 256, 256]
     n_species: None
 
 # ----------------------------
 # Optional: save name pattern
 # ----------------------------
-run_name: "test_sweep"
+run_name: "run_failed_relaunch"
 wandb:
   project: contrastive_learning
   entity: adammenoud
