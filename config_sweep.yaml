@@ -1,17 +1,18 @@
 # sweep.yaml
 program: main.py
 method: grid      
-project: contrastive_learning
+project: sweep
 entity: adammenoud
 
-metric:
-  name: Cross-entropy validation    
-  goal: minimize
+
 parameters:
   dataset: 
     values: [arthropods, mushrooms,plants]
-  vectors_name: 
-    values: [vectors_bioclip, vectors_dino]
+  # vectors_name: 
+  #   values: [vectors_bioclip, vectors_dino]
   drop_high_freq:
     values: [True, False]
 
+    
+  difference: 
+        values: [True, False]

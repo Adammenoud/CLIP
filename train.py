@@ -89,10 +89,16 @@ def train(doublenetwork,
                     "Cross-entropy training": loss.item(),
                     "logit_scale": doublenetwork.logit_scale.item(),
                     **{f"train/{k}": v for k, v in metrics.items()},
+                    "epoch": ep,
                 },
                 step=ep * l + i
             )
-        
+            if i % 10==0:
+                checkpoint_name = f"Video_checkpoints/checkpoint_{ep*l+i}"
+                os.makedirs(checkpoint_name, exist_ok=True)
+                torch.save(doublenetwork.state_dict(), os.path.join(checkpoint_name, f"model.pt"))
+                torch.save(optimizer.state_dict(), os.path.join(checkpoint_name, f"optim.pt"))
+
     ################################# validation logs and checkpoints
         if ep % saving_frequency == 0 and (save_name is not None):
             os.makedirs(save_name, exist_ok=True)
@@ -118,7 +124,7 @@ def train(doublenetwork,
         if save_name is not None and nbr_checkppoints is not None and ep % (epochs//nbr_checkppoints)==0 and ep!= 0:
             checkpoint_name = f"{save_name}/checkpoints/checkpoint_{current_checkpoint}"
             os.makedirs(checkpoint_name, exist_ok=True)
-            torch.save(doublenetwork.state_dict(), os.path.join(checkpoint_name, f"model.pt")) #overwrites the same file, so to avoid getting floded by saves
+            torch.save(doublenetwork.state_dict(), os.path.join(checkpoint_name, f"model.pt"))
             torch.save(optimizer.state_dict(), os.path.join(checkpoint_name, f"optim.pt"))
             current_checkpoint +=1
         if test_dataloader is not None and ep % test_frequency == 0:

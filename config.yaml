@@ -1,15 +1,16 @@
 # ----------------------------
 # Dataset and embeddings
 # ----------------------------
-dataset: plants          # Default, overridden by sweep
+dataset: plants        # Default, overridden by sweep
 vectors_name: vectors_bioclip # Default, overridden by sweep
-use_species: False
+use_species: False #with vectors_name: vectors
+difference: False #If using mixed_HDF5Dataset, in the contrastive case, can be overriden by sweep
 
 shuffle: True
 train_ratio: 0.8
 sort_duplicates: True 
 drop_last: True
-dataset_type: ordered_HDF5Dataset
+dataset_type: mixed_HDF5Dataset #ordered_HDF5Dataset
 
 paths:
   arthropods:
@@ -25,6 +26,12 @@ paths:
     specie_data: Embeddings_and_dictionaries/plants/species_embeddings_inaturalist_FR_plants.h5
     dict: Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants
 
+  pl@ntnet: #meaning, pl@ntnet with bioclip encoder: vector name: "vectors"
+    data: Embeddings_and_dictionaries/Plantnet_old/Bioclip_encoder/bioCLIP_full_dataset_embeddings.h5
+    specie_data: Embeddings_and_dictionaries/Plantnet_old/Bioclip_encoder/bioCLIP_species_embeddings.h5
+    dict: Embeddings_and_dictionaries/Plantnet_old/Bioclip_encoder/bioclip_data_dictionary_all_taxons
+
+
 
 # ----------------------------
 # Training hyperparameters
@@ -33,19 +40,19 @@ drop_high_freq: False         # Default, overridden by sweep
 
 
 training:
-  epochs: 120
+  epochs: 40
   batch_size: 4096
   lr: 0.0001                
   device: cuda
   saving_frequency: 1
-  nbr_checkpoints: 120
+  nbr_checkpoints: 20
   test_frequency: 1
   nbr_tests: 10
   
 # ----------------------------
 # Model
 # ----------------------------
-model_name: contrastive
+model_name: contrastive  
 
 model_params:
   pretrained_geoclip_encoder: False
@@ -54,17 +61,18 @@ model_params:
     modalities: #yaml list, will be loaded as a python list
       - images
       - coords
+    embedding_size: 1536 #2*768
   classifier:
     class_column: species
-    loss: "cross_entropy"
-    #encoded_size: 256  #encoding dimension for each sigma frequency
-    #hidden_layers: [256, 256, 256]
-    n_species: None
+    loss: "MSE" #"cross_entropy", MSE
+    n_species: null #None in python, defaults to all species
+    target: embeddings              #embeddings, specie_names
 
 # ----------------------------
 # Optional: save name pattern
 # ----------------------------
-run_name: "run_failed_relaunch"
+run_name: "species_and_images_embeddings_contrastive"
+
 wandb:
   project: contrastive_learning
   entity: adammenoud

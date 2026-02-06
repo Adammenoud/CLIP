@@ -15,7 +15,8 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 import open_clip
 from geoclip import LocationEncoder
-
+import yaml
+import classifier_training
 
 def get_resnet(dim_emb, device="cuda"):
     model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1) #can also set weights to None
@@ -265,19 +266,18 @@ class DoubleNetwork(nn.Module):
         return logits
     
 class DoubleNetwork_V2(nn.Module):
-    def __init__(self, pos_encoder=LocationEncoder(from_pretrained=False),dim_hidden=768,dim_output=512,device="cuda",temperature=0.07):
+    def __init__(self, pos_encoder=LocationEncoder(from_pretrained=False),dim_in=768,dim_hidden=768,dim_output=512,device="cuda",temperature=0.07):
         super().__init__()
         self.pos_encoder=pos_encoder
-        #self.logit_scale = nn.Parameter(torch.log(torch.tensor(1/temperature))).to(device) # This used to freeze the gradient... Why?
+        self.logit_scale = nn.Parameter(torch.log(torch.tensor(1/temperature))).to(device) # This used to freeze the gradient: moving the tensor breaks its "parameter wrapper"...
         self.logit_scale = nn.Parameter(torch.tensor([1.0 / temperature], dtype=torch.float32, device=device).log())
 
         self.device=device
 
 
-        self.lin1 = nn.Linear(768, dim_hidden)
+        self.lin1 = nn.Linear(dim_in, dim_hidden)
         self.relu = nn.ReLU()
         self.lin2 = nn.Linear(dim_hidden, dim_output)
-
 
     def forward(self, image, coordinates, idx=None): #takes a batch of images and their labels
         '''returns the normalized pos/image similarity matrix'''
@@ -426,3 +426,59 @@ class MultilGaussianEncoding(nn.Module):
 
     def forward(self, x):
         return torch.cat([encoder(x) for encoder in self.encoders], dim=1)
+
+
+
+def build_model(cfg):
+    '''
+    Takes a config path and constructs the model (without loading the weights).
+    Follows the logic of the main but do not have all the details making them trainable (run_name, dictionary etc...) 
+    Use for downstream evaluation only
+    drop_last is used in the case of a classifier predicting species only.
+    '''
+    model=None
+    #shared parameters
+    if cfg["drop_high_freq"]:
+            sigma=[2**0, 2**4]
+    else:
+            sigma=[2**0, 2**4, 2**8]
+    #model branching
+    if cfg["model_name"]=="contrastive":
+        try:
+            embedding_size = cfg["model_params"]["contrastive"]["embedding_size"]
+        except KeyError:
+            embedding_size = 768
+        model=DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder']),dim_in=embedding_size)
+    elif cfg["model_name"]=="classifier":
+        dim_output = cfg["model_params"]['classifier']['dim_output']    
+        model = nn.Sequential(
+                LocationEncoder(sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder']),
+                nn.ReLU(),
+                nn.Linear(512,dim_output)
+                    )
+    else: 
+        print("could not build the model from the config")
+    return model.to("cuda")
+
+def load_model(model_path,config_path,device="cuda"):
+    with open(config_path) as f:
+        cfg=yaml.safe_load(f)
+    model=build_model(cfg)
+    state_dict = torch.load(model_path, map_location='cuda',weights_only=True)
+    if "state_dict" in state_dict:
+        state_dict = state_dict["state_dict"]  #if it is a lightning checkpoint instead, gets the statedict
+        state_dict = {k.replace("model.", ""): v for k, v in state_dict.items()} #gets rid of the model. added by lightning
+    state_dict.pop('class_lookup', None) # Remove 'class_lookup' if it exists, since we build the model without it (we do not use the last layer)
+    model.load_state_dict(state_dict)
+    model=model.to(device)
+    return model
+
+def load_pos_enc(model_path,config_path):
+    model=load_model(model_path,config_path)
+    with open(config_path) as f:
+        cfg=yaml.safe_load(f)
+    if cfg["model_name"]=="contrastive": #get the right encoder
+        pos_encoder=model.pos_encoder
+    else:
+        pos_encoder=model[0] 
+    return pos_encoder

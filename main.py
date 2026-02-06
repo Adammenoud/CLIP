@@ -50,11 +50,20 @@ with open("config_sweep.yaml") as f:
 
 sweep_keys = sweep_cfg["parameters"].keys()
 run_name = utils.get_run_name(static_cfg["run_name"], cfg, sweep_keys)
+cfg.run_name_clean=static_cfg["run_name"] #saves the basic name also
 run.name=run_name #same format on wandb
-cfg_dict = dict(cfg)
+if cfg.model_name == "classifier": #dim_output for classifier
+    model_cfg = cfg.model_params['classifier']
+    if model_cfg["target"]== "embeddings":
+        dim_output=768
+    else:
+        dictionary=pd.read_csv(static_cfg['paths'][cfg.dataset]['dict'])
+        dim_output=len(dictionary[model_cfg['class_column']].unique())
+    cfg.model_params['classifier']['dim_output'] = dim_output
 #dumps the config
 file_path = Path(f"Model_saves/{run_name}/config.yaml")
 file_path.parent.mkdir(parents=True, exist_ok=True)
+cfg_dict = dict(cfg)
 with open(file_path, "w") as f:
     yaml.dump(cfg_dict, f, default_flow_style=False)
 
@@ -85,6 +94,7 @@ dictionary=pd.read_csv(dict_path)
 
 
 print("spliting data")
+difference=None #compatibility
 dataloader, test_dataloader =utils.dataloader_emb(data_path,
                                                   batch_size=cfg.training['batch_size'], 
                                                   shuffle=cfg.shuffle,
@@ -93,7 +103,9 @@ dataloader, test_dataloader =utils.dataloader_emb(data_path,
                                                   dictionary=dictionary,
                                                   drop_last=cfg.drop_last,
                                                   dataset_type=cfg.dataset_type,
-                                                  vectors_name=cfg.vectors_name
+                                                  vectors_name=cfg.vectors_name,
+                                                  spe_data_path=static_cfg['paths'][dataset]["specie_data"],
+                                                  difference=static_cfg["difference"]
                                                   )
 if cfg.drop_high_freq:
     sigma=[2**0, 2**4]
@@ -103,7 +115,7 @@ else:
 
 if cfg.model_name=="contrastive":
     model_cfg = cfg.model_params['contrastive']
-    model=nn_classes.DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder']))
+    model=nn_classes.DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder']),dim_in=static_cfg["model_params"]["contrastive"]["embedding_size"])
     print("training")
     model=train.train(
                 model,
@@ -121,12 +133,15 @@ if cfg.model_name=="contrastive":
                 modalities=model_cfg['modalities'], 
                 dictionary=dictionary,  #if one wants to use a different dictionary in the "species" case
                 )
-if cfg.model_name== "classifier":
+elif cfg.model_name== "classifier":
     model_cfg = cfg.model_params['classifier']
     if model_cfg['loss'] == "cross_entropy":
         loss=F.cross_entropy
+    elif model_cfg['loss'] == "MSE":
+        loss=F.mse_loss
     if model_cfg['n_species'] is None:
         n_species=len(dictionary[model_cfg['class_column']].unique())
+        print("n_species:" , n_species)
     else:
         pass #could filter species here, maybe later
     #wandb
@@ -135,27 +150,36 @@ if cfg.model_name== "classifier":
     entity=static_cfg['wandb']['entity'],
     name=run_name)
     #model
+    dim_output = cfg.model_params['classifier']['dim_output']    
     model = nn.Sequential(
                 LocationEncoder(sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder']),
-                nn.Linear(512,n_species)
+                nn.ReLU(),
+                nn.Linear(512,dim_output)
                     )
-    # model = nn.Sequential(
-    #             nn_classes.MultilGaussianEncoding(encoded_size=model_cfg['encoded_size'],sigma=sigma),
-    #             nn_classes.MLP(
-    #                 in_dim=len(sigma)*model_cfg['encoded_size'],
-    #                 hidden=model_cfg['hidden_layers'],
-    #                 out_dim=n_species  
-    #                 )
-    # )
+
     #(put model in wrapper)
-    model=classifier_training.Classifier_train(model=model,
+    if model_cfg["target"]== "embeddings":
+        model=classifier_training.Embeddings_Classifier_train(
+            model, 
+            f"Model_saves/{run_name}",
+            loss=loss,
+            name_training_loss="MSE on training set", 
+            name_val_loss="MSE on validation set", 
+            lr=1e-4
+        )
+    elif model_cfg["target"]== "specie_names":
+        model=classifier_training.Classifier_train(model=model,
                     dictionary=dictionary,
                     save_name=f"Model_saves/{run_name}",
                     lr=cfg.training['lr'],
                     loss=loss,
                     name_training_loss=f"{model_cfg['loss']} training", 
-                    name_val_loss=f"{model_cfg['loss']} validation"
+                    name_val_loss=f"{model_cfg['loss']} validation",
+                    class_name=model_cfg['class_column']
                     )
+    else:
+        raise ValueError(f"target '{model_cfg['target']}' invalid: select 'embeddings' or 'specie_names'")
+    
     #checkpoints
     checkpoint_cb = ModelCheckpoint(
                             dirpath=f"Model_saves/{run_name}/checkpoints",

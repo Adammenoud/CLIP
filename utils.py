@@ -23,6 +23,10 @@ import rasterio
 import open_clip
 import pandas as pd
 import wandb
+import os
+import nn_classes
+import yaml
+from scipy.stats import gaussian_kde
 
 
 def noise(input, std):
@@ -97,29 +101,36 @@ def dataloader_emb(file_path,batch_size,shuffle=False,train_proportion=0.8): #fr
     return train_loader, test_loader
     '''
 
-def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=False, dictionary=None,drop_last=True, dataset_type="HDF5_dataset", vectors_name="vectors"): #from a h5 file
+def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=False, dictionary=None,drop_last=True, dataset_type="HDF5_dataset", vectors_name="vectors",spe_data_path=None,difference=False,num_workers=16): #from a h5 file
     '''solves to the duplication problem, but need to take a dictionary with gbifID column.'''
-    if dataset_type == "HDF5_dataset":
+    if dataset_type == "HDF5Dataset":
         dataset=data_extraction.HDF5Dataset(file_path,data_name=vectors_name)
     elif dataset_type == "ordered_HDF5Dataset":
         dataset=data_extraction.ordered_HDF5Dataset(file_path,dictionary,data_name=vectors_name)
+    elif dataset_type == "mixed_HDF5Dataset":
+        if dictionary is None or spe_data_path is None:
+            raise Exception(f" 'None' arguments passed to 'mixed_HDF5Dataset' ")
+        dataset=data_extraction.mixed_HDF5Dataset(file_path_images=file_path,file_path_spe=spe_data_path, dictionary=dictionary, data_name_images=vectors_name,difference=difference)
+    else:
+        raise Exception(f"invalid 'dataset_type' argument: found '{dataset_type}' instead of 'HDF5Dataset' or 'ordered_HDF5Dataset' or 'mixed_HDF5Dataset' ")
 
     train_size = int(train_ratio * len(dataset))
     test_size = len(dataset) - train_size
 
     generator = torch.Generator().manual_seed(48)
     if sort_duplicates:
-        if dataset_type == "HDF5_dataset":
+        if dataset_type == "HDF5Dataset":
             with h5py.File(file_path, "r") as f:
                 dict_indices = f["dict_idx"][:].flatten()
-        elif dataset_type == "ordered_HDF5Dataset":
+        elif dataset_type == "ordered_HDF5Dataset" or dataset_type == "mixed_HDF5Dataset":
             dict_indices = dataset.dictionary.index
         train_dataset, test_dataset=group_split(dataset,dict_indices, dictionary,generator, train_ratio)
     else:
         train_dataset, test_dataset = random_split(dataset, [train_size, test_size],generator=generator)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle,drop_last=drop_last)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle,drop_last=drop_last)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle,drop_last=drop_last,num_workers=num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle,drop_last=drop_last,num_workers=num_workers)
     return train_loader, test_loader
 def group_split(dataset, dict_indices, dictionary,generator, train_ratio=0.8):
     """Split dataset into train/test SUCH THAT samples with the same ID stay together.
@@ -292,7 +303,7 @@ def coord_to_PCA(coords, pos_enc,pca_model_path, comp_idx=1):
     vect_to_plot = pca_model.transform(embeddings.detach().numpy())
     return vect_to_plot[:,comp_idx]
 
-def plot_country_values(country_name, fct_to_plot,pos_encoder,pca_model_path="PCA_All_comp_full_dataset_Normalized.pkl", grid_resolution=0.1, cmap='viridis',device="cuda",comp_idx=0,save_path=None):
+def plot_country_values(country_name, fct_to_plot,pos_encoder,pca_model_path="PCA_All_comp_full_dataset_Normalized.pkl", grid_resolution=0.1, cmap='viridis',device="cuda",comp_idx=0,save_path=None,vmin=None,vmax=None):
     coords = create_country_grid(country_name, grid_resolution)
     values = fct_to_plot(coords.to(device), pos_encoder,pca_model_path,comp_idx=comp_idx)#np.array([coord_trans(coord) for coord in coords])
     # Get the country polygon
@@ -302,7 +313,7 @@ def plot_country_values(country_name, fct_to_plot,pos_encoder,pca_model_path="PC
     if country_name=="France":
         polygon=filter_France(polygon)
     boundary = gpd.GeoSeries([polygon])
-    plot_values(coords,values,boundary,save_path,country_name)
+    plot_values(coords,values,boundary,save_path,country_name,vmin=vmin,vmax=vmax)
 
 def create_country_grid(country_name, grid_resolution=0.1):
     '''Returns the coordinates of points inside the country. 
@@ -456,14 +467,22 @@ def apply_pos_enc(coords, pos_encoder,pca_model_path=None,comp_idx=None):
     return pos_encoder(coords).cpu()
 
 
-def map_image(doublenetwork, path_to_image, country="Switzerland", device="cuda", grid_resolution=0.1, save_path=None):
+def map_image(doublenetwork, image, country="Switzerland", device="cuda", grid_resolution=0.1, save_path=None,vmin=None,vmax=None):
     '''
     Plots the similarity score of each coordinate with the image.
-    If no save_path is given, uses plt.show()
+    image can be either a path or a PIL image.
+    If no save_path is given, uses plt.show() directly
     '''
-    image=Image.open(path_to_image).convert("RGB")
+    if isinstance(image, (str, Path)):
+        image = Image.open(image).convert("RGB")
+    elif isinstance(image, Image.Image):
+        image = image.convert("RGB")
+    else:
+        raise TypeError(
+            "path_or_image must be a file path (str or Path) or a PIL.Image.Image"
+        )
     emb_img = embedds_image(image)
-    map_embedding(doublenetwork, emb_img, country=country, device=device, grid_resolution=grid_resolution, save_path=save_path)
+    map_embedding(doublenetwork, emb_img, country=country, device=device, grid_resolution=grid_resolution, save_path=save_path,vmin=vmin,vmax=vmax)
     
 
 def embedds_image(image, device="cuda"):
@@ -475,7 +494,7 @@ def embedds_image(image, device="cuda"):
     emb_img = bioclip.encode_image(image)
     return emb_img
 
-def map_embedding(doublenetwork, embedding, country="Switzerland", device="cuda", grid_resolution=0.1, save_path=None):
+def map_embedding(doublenetwork, embedding, country="Switzerland", device="cuda", grid_resolution=0.1, save_path=None,vmin=None,vmax=None):
     '''
     Plots the similarity score of each coordinate with the image embedding.
     If no save_path is given, uses plt.show()
@@ -492,19 +511,20 @@ def map_embedding(doublenetwork, embedding, country="Switzerland", device="cuda"
     if country=="France":
         polygon=filter_France(polygon)
     boundary = gpd.GeoSeries([polygon])
-    plot_values(coords,values,boundary,save_path,country)
+    plot_values(coords,values,boundary,save_path,country,vmin=vmin,vmax=vmax)
 
-def plot_values(coords,values,boundary,save_path,country):
+def plot_values(coords,values,boundary,save_path,country,vmin=None,vmax=None):
     coords=to_numpy(coords)
     values=to_numpy(values)
     fig, ax = plt.subplots(figsize=(8, 10))
     boundary.plot(ax=ax, color="none", edgecolor="black")
-    sc = ax.scatter(coords[:, 0], coords[:, 1], c=values, cmap='viridis', s=1, alpha=0.5)
+    sc = ax.scatter(coords[:, 0], coords[:, 1], c=values, cmap='viridis', s=1, alpha=0.5,vmin=vmin, vmax=vmax)
     plt.colorbar(sc, ax=ax, label="Value")
     ax.set_title(f"Image similarity over {country}")
     if save_path is None:
         plt.show()
     else:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
         plt.savefig(save_path)
     
 
@@ -515,13 +535,6 @@ def to_numpy(x):
         return x.detach().cpu().numpy()
     raise TypeError(f"Unsupported type: {type(x)}")
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from scipy.stats import gaussian_kde
-from shapely.geometry import Point, Polygon
-import regionmask
-import torch
 
 def plot_species_density(df, species_name, country_name, grid_resolution=0.1, bandwidth=0.05,plot_points=True):
     """
@@ -603,11 +616,14 @@ def get_species_emb(indices, dictionary, model,tokenizer, column_name="taxa_bioc
         embeddings = model.encode_text(tokens)
     return embeddings
 
-def get_example(dataset_path, idx):
-    '''Fetches an example from the HDF5 dataset'''
-    dataset=data_extraction.HDF5Dataset(dataset_path)
-    emb_vector, coord , idx = dataset[idx]
-    return emb_vector, coord, idx
+def get_example(dataset_path, idx,vector_name="vectors_bioclip"):
+    with h5py.File(dataset_path, "r") as f:
+        vector = f[vector_name][idx]  # <-- access the i-th vector directly
+    return vector
+    # '''Fetches an example from the HDF5 dataset'''
+    # dataset=data_extraction.HDF5Dataset(dataset_path)
+    # emb_vector, coord , idx = dataset[idx]
+    # return emb_vector, coord, idx
 
 
 def get_run_name(base_name, cfg, sweep_keys):
@@ -625,3 +641,76 @@ def get_run_name(base_name, cfg, sweep_keys):
         else:
             parts.append(str(val))
     return "_".join(parts)
+
+def plot_image_from_index(data_dict, index, return_only=False):
+    url = data_dict.iloc[index]["identifier"]
+    response = data_extraction.get(url)
+    response.raise_for_status()
+
+    image = Image.open(response.raw).convert("RGB")
+    if return_only:
+        return image
+    plt.imshow(image)
+    plt.axis("off")
+    plt.show()
+
+
+def configs_from_folder(checkpoint_folder):
+    '''
+    Works only for the contrastive folder name
+    '''
+    checkpoint_paths_model = []
+    for d in os.listdir(checkpoint_folder):
+        subdir = os.path.join(checkpoint_folder, d)
+        model_path = os.path.join(subdir, "model.pt")
+        if os.path.isdir(subdir) and "checkpoint_" in d:
+            if os.path.isfile(model_path):
+                checkpoint_paths_model.append(model_path)
+    return checkpoint_paths_model
+
+import re
+
+def configs_from_folder(checkpoint_folder,sort=True):
+    '''
+    Works only for the contrastive folder name
+    Assumes folders are named checkpoint_i
+    '''
+    checkpoint_paths_model = []
+
+    def extract_index(name):
+        m = re.search(r'checkpoint_(\d+)', name)
+        return int(m.group(1)) if m else float('inf')
+
+    dirs=os.listdir(checkpoint_folder)
+    if sort:
+        dirs = sorted(dirs,key=extract_index)
+
+    for d in dirs:
+        subdir = os.path.join(checkpoint_folder, d)
+        model_path = os.path.join(subdir, "model.pt")
+        if os.path.isdir(subdir) and "checkpoint_" in d:
+            if os.path.isfile(model_path):
+                checkpoint_paths_model.append(model_path)
+
+    return checkpoint_paths_model
+
+def video_similarity(checkpoint_folder,config_path,image,save_path=None,vmin=None,vmax=None):
+    '''
+    goes through the checkpoints of the folder and get the similarity map for each model.
+    Works only for the specific folder checkpoint format of this project.
+    image can be either a path or a PIL image.
+    '''
+    models= configs_from_folder(checkpoint_folder) #paths
+    with open(config_path) as f:
+        cfg=yaml.safe_load(f)
+    model= nn_classes.build_model(cfg)
+
+    for i in range(len(models)):
+        print(models[i])
+        state_dict = torch.load(models[i], map_location='cuda',weights_only=True)
+        model.load_state_dict(state_dict)
+        if save_path is None:
+            output_dir=None
+        else:
+            output_dir=os.path.join(save_path, f"{i}")
+        map_image(model, image, country="France", device="cuda", grid_resolution=0.03, save_path=output_dir,vmin=vmin,vmax=vmax)

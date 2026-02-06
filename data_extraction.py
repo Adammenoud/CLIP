@@ -230,6 +230,36 @@ class HDF5Dataset(Dataset):
             torch.tensor(dict_idx, dtype=torch.int64)
         )
 
+class mixed_HDF5Dataset(Dataset):
+    '''
+    combines species embeddings and images embeddings.
+    Either simply concatenate, or concatenate species and the normalized image-specie vector, if difference=True
+    Specie embeddings have to be ordered as well, otherwise there will be an error.
+    '''
+
+    def __init__(self, file_path_images,file_path_spe, dictionary, data_name_images="vectors_bioclip",data_name_spe="vectors", label_name="coordinates",valid_name="valid", do_valid=True,difference=False):
+        self.images_dataset=ordered_HDF5Dataset(file_path_images, dictionary, data_name=data_name_images, label_name=label_name,valid_name=valid_name, do_valid=do_valid)
+        self.spe_dataset=HDF5Dataset(file_path_spe, data_name=data_name_spe, label_name=label_name)
+        self.difference=difference
+        self.dictionary=dictionary
+
+    def __len__(self):
+        return len(self.images_dataset) #spe_data should have all entries
+    
+    def __getitem__(self, idx):
+        image_emb, image_coords ,image_idx = self.images_dataset[idx]
+        spe_emb, _, spe_idx= self.spe_dataset[image_idx]
+        if spe_idx != image_idx:
+            raise ValueError("The indices returned by the image dataset do not correspond to those from the species dataset.")
+        
+        if self.difference:
+            image_emb=image_emb-spe_emb
+            image_emb= torch.nn.functional.normalize(image_emb,dim=0) # the size is (768,) for now (gets single item)
+
+        return torch.cat((spe_emb,image_emb),dim=0), image_coords, spe_idx
+
+
+
 class ordered_HDF5Dataset(Dataset):
     '''
     This class assumes that the HDF5 indices correspond to indices of the dictionary.
@@ -275,7 +305,7 @@ class ordered_HDF5Dataset(Dataset):
         return (
             torch.tensor(data, dtype=torch.float32),
             torch.tensor(label, dtype=torch.float32),
-            torch.tensor(hdf5_idx, dtype=torch.int64)
+            torch.tensor(idx, dtype=torch.int64) #return the idx of dictionary, the one that has meaningful metadata associated to.
         )
 
 
@@ -368,6 +398,18 @@ def species_classIdx_dict(dictionary, class_name="scientificName"):
     df_codes = pd.DataFrame({'class_idx': class_codes}, index=dictionary.index)
     return df_codes
 
+
+
+def plot_image_from_index(data_dict, index, return_only=False):
+    url = data_dict[index]["identifier"]
+    response = get(url, stream=True)
+    response.raise_for_status()
+
+    image = Image.open(response.raw).convert("RGB")
+
+    plt.imshow(image)
+    plt.axis("off")
+    plt.show()
 
 if __name__== "__main__":
     

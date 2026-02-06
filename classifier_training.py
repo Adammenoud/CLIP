@@ -75,7 +75,6 @@ class GeneralLoop(L.LightningModule):
     def validation_step(self, batch):
         x =self(batch)
         target= self.get_target_from_batch(batch)
-        print("x:", x.shape, "target:", target.shape)
         loss=self.loss(x, target)
         self.log(self.name_val_loss, loss, prog_bar=True)
         return loss
@@ -93,31 +92,57 @@ class Classifier_train(GeneralLoop):
         We train from the hp5 file, it would be more optimal from a dictionary directly
         Model's output must match the number of species
     '''
-    def __init__(self, model, dictionary,save_name ,loss=F.cross_entropy,name_training_loss="Cross-entropy", name_val_loss="CE on test set", lr=1e-4):
+    def __init__(self, model, dictionary,save_name ,loss=F.cross_entropy,name_training_loss="Cross-entropy", name_val_loss="CE on test set", lr=1e-4,class_name="scientificName"):
         super().__init__(model, loss, save_name ,name_training_loss, name_val_loss, lr)
 
         self.dictionary=dictionary
-        class_dict=data_extraction.species_classIdx_dict(dictionary, class_name="scientificName")
-        self.register_buffer(
-            "class_lookup",
-            torch.tensor(
-                class_dict["class_idx"].values,
-                dtype=torch.long
-            )
-        )
+        if dictionary is not None:
+                class_dict = data_extraction.species_classIdx_dict(
+                    dictionary, class_name=class_name
+                )
+                class_lookup = torch.tensor(
+                    class_dict["class_idx"].values,
+                    dtype=torch.long
+                )
+        else:
+            class_lookup = torch.empty(0, dtype=torch.long)
+        self.register_buffer("class_lookup", class_lookup)
 
     @override
     def forward(self, batch):
         _, coords, idx = batch
-        return self.model(coords)
+        x=self.model(coords)
+        return x
     
     @override
     def get_target_from_batch(self, batch):
         _, coords, idx = batch
         idx = idx.long().squeeze()
-        return self.class_lookup[idx]
+        target = self.class_lookup[idx]
+        if idx.max() >= len(self.class_lookup):
+            print("IDX OUT OF RANGE")
+            print("idx max:", idx.max().item())
+            print("lookup size:", len(self.class_lookup))
+            raise ValueError
+        return target
 
+class Embeddings_Classifier_train(GeneralLoop):
+    '''
+    Predicts directly a bioclip/DINO embedding from a location (not really a classifier, uses an L2 norm)
+    '''
+    def __init__(self, model, save_name ,loss=F.mse_loss,name_training_loss="MSE on training set", name_val_loss="MSE on validation set", lr=1e-4):
+        super().__init__(model, loss, save_name ,name_training_loss, name_val_loss, lr)
 
+    @override
+    def forward(self, batch):
+        _, coords, idx = batch
+        x=self.model(coords)
+        return x
+    
+    @override
+    def get_target_from_batch(self, batch):
+        embedding, coords, idx = batch
+        return embedding
 
 #--------------------------------------------------------------------------------------
 if __name__ == "__main__":
