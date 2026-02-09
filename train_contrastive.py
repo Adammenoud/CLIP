@@ -93,11 +93,12 @@ def train(doublenetwork,
                 },
                 step=ep * l + i
             )
-            if i % 10==0:
-                checkpoint_name = f"Video_checkpoints/checkpoint_{ep*l+i}"
-                os.makedirs(checkpoint_name, exist_ok=True)
-                torch.save(doublenetwork.state_dict(), os.path.join(checkpoint_name, f"model.pt"))
-                torch.save(optimizer.state_dict(), os.path.join(checkpoint_name, f"optim.pt"))
+            #Used for image generation (several checkpoint per epoch)
+            # if i % 10==0:
+            #     checkpoint_name = f"Video_checkpoints/checkpoint_{ep*l+i}"
+            #     os.makedirs(checkpoint_name, exist_ok=True)
+            #     torch.save(doublenetwork.state_dict(), os.path.join(checkpoint_name, f"model.pt"))
+            #     torch.save(optimizer.state_dict(), os.path.join(checkpoint_name, f"optim.pt"))
 
     ################################# validation logs and checkpoints
         if ep % saving_frequency == 0 and (save_name is not None):

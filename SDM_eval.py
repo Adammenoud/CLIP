@@ -565,7 +565,9 @@ def run_SDM_on_superfolder(
     return final_df
 
 if __name__ == "__main__":
-    run_SDM_on_superfolder("Model_saves/sweep_classifier","results.csv")
-    run_SDM_on_superfolder("Model_saves/sweep_classifier_emb","results.csv")
-    run_SDM_on_superfolder("Model_saves/sweep_contrastive_images","results.csv")
-    run_SDM_on_superfolder("Model_saves/sweep_contrastive_species","results.csv")
+    # run_SDM_on_superfolder("Model_saves/sweep_classifier","results.csv")
+    # run_SDM_on_superfolder("Model_saves/sweep_classifier_emb","results.csv")
+    # run_SDM_on_superfolder("Model_saves/sweep_contrastive_images","results.csv")
+    # run_SDM_on_superfolder("Model_saves/sweep_contrastive_species","results.csv")
+    run_SDM_on_superfolder("","results_geoplant_clean.csv",params_to_read=["drop_high_freq", "dataset","vectors_name","model_name","use_species","run_name_clean","difference"])
+

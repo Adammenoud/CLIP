@@ -15,6 +15,7 @@ import utils
 import time
 from requests.exceptions import RequestException
 import threading
+import matplotlib.pyplot as plt
 
 
 #data available at https://api.gbif.org/v1/occurrence/download/request/0015029-251025141854904.zip

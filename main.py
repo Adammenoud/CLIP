@@ -18,9 +18,9 @@ import utils
 import nn_classes
 import data_extraction
 import hdf5
-import train
+import train_contrastive
 import SDM_eval
-import classifier_training
+import train_classifier
 #geoclip
 from geoclip import LocationEncoder, GeoCLIP
 
@@ -117,7 +117,7 @@ if cfg.model_name=="contrastive":
     model_cfg = cfg.model_params['contrastive']
     model=nn_classes.DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder']),dim_in=static_cfg["model_params"]["contrastive"]["embedding_size"])
     print("training")
-    model=train.train(
+    model=train_contrastive.train(
                 model,
                 epochs=cfg.training['epochs'],
                 dataloader=dataloader,
@@ -159,7 +159,7 @@ elif cfg.model_name== "classifier":
 
     #(put model in wrapper)
     if model_cfg["target"]== "embeddings":
-        model=classifier_training.Embeddings_Classifier_train(
+        model=train_classifier.Embeddings_Classifier_train(
             model, 
             f"Model_saves/{run_name}",
             loss=loss,
@@ -168,7 +168,7 @@ elif cfg.model_name== "classifier":
             lr=1e-4
         )
     elif model_cfg["target"]== "specie_names":
-        model=classifier_training.Classifier_train(model=model,
+        model=train_classifier.Classifier_train(model=model,
                     dictionary=dictionary,
                     save_name=f"Model_saves/{run_name}",
                     lr=cfg.training['lr'],

@@ -27,6 +27,11 @@ import os
 import nn_classes
 import yaml
 from scipy.stats import gaussian_kde
+import re
+
+
+import train_contrastive
+
 
 
 def noise(input, std):
@@ -101,8 +106,11 @@ def dataloader_emb(file_path,batch_size,shuffle=False,train_proportion=0.8): #fr
     return train_loader, test_loader
     '''
 
-def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=False, dictionary=None,drop_last=True, dataset_type="HDF5_dataset", vectors_name="vectors",spe_data_path=None,difference=False,num_workers=16): #from a h5 file
-    '''solves to the duplication problem, but need to take a dictionary with gbifID column.'''
+def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=True, dictionary=None,drop_last=True, dataset_type="HDF5_dataset", vectors_name="vectors",spe_data_path=None,difference=False,num_workers=16): #from a h5 file
+    '''
+    solves to the duplication problem, but needs to take a dictionary with gbifID column.
+    Also possible to use naively without the dictionary by setting sort_duplicates=False.
+    '''
     if dataset_type == "HDF5Dataset":
         dataset=data_extraction.HDF5Dataset(file_path,data_name=vectors_name)
     elif dataset_type == "ordered_HDF5Dataset":
@@ -132,6 +140,7 @@ def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_dupl
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle,drop_last=drop_last,num_workers=num_workers)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle,drop_last=drop_last,num_workers=num_workers)
     return train_loader, test_loader
+
 def group_split(dataset, dict_indices, dictionary,generator, train_ratio=0.8):
     """Split dataset into train/test SUCH THAT samples with the same ID stay together.
     Technically, there may be some variance to the training set proportion since not all Gbif indices have the same number of images."""
@@ -160,18 +169,11 @@ def group_split(dataset, dict_indices, dictionary,generator, train_ratio=0.8):
 
 
 
-
-
-
-import train
-
-
-
 def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,device="cuda", plot_sims=True,sort_duplicates=True, dictionary_path="embeddings_data_and_dictionaries/data_dictionary_sciName", modalities=["images","coords"]):
     '''Picks random samples and gives the (average) similarity between the image emmbedding and the coordinate embedding
     dictionary is used to get the dataloader. It can be set to None, together with
     '''
-    tokenizer, scaler, bioclip= train.prepare_modality_tools(modalities)
+    tokenizer, scaler, bioclip= train_contrastive.prepare_modality_tools(modalities)
     if dictionary_path is not None:
         dictionary=pd.read_csv(dictionary_path)
     else:
@@ -195,7 +197,7 @@ def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,
         emb_vectors = emb_vectors.to(device)
         coord = coord.to(device)
         idx=idx = idx.numpy().reshape(-1).tolist()
-        mod= train.get_modalities(modalities, emb_vectors, coord, idx, ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"], dictionary, scaler, bioclip, tokenizer, device="cuda")
+        mod= train_contrastive.get_modalities(modalities, emb_vectors, coord, idx, ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"], dictionary, scaler, bioclip, tokenizer, device="cuda")
         logits=doublenetwork(mod[0],mod[1])
 
         logits=logits/doublenetwork.logit_scale.exp()
@@ -317,7 +319,7 @@ def plot_country_values(country_name, fct_to_plot,pos_encoder,pca_model_path="PC
 
 def create_country_grid(country_name, grid_resolution=0.1):
     '''Returns the coordinates of points inside the country. 
-        return size: (nbr_points,2) with order lat, lon for the 2nd dimension
+        returns: torch tensor of size (nbr_points,2) with order lat, lon for the 2nd dimension
     '''
     # Load 110m Natural Earth countries
     countries = regionmask.defined_regions.natural_earth_v5_0_0.countries_10
@@ -345,6 +347,9 @@ def create_country_grid(country_name, grid_resolution=0.1):
 
 
 def filter_France(polygon):
+    '''
+    Takes the polygon of France (including overseas) and returns only the part corresponding to metropolitan France.
+    '''
     parts = list(polygon.geoms)
     bbox_metro = geom.box(minx=-10, miny=40, maxx=15, maxy=55)
 
@@ -513,14 +518,24 @@ def map_embedding(doublenetwork, embedding, country="Switzerland", device="cuda"
     boundary = gpd.GeoSeries([polygon])
     plot_values(coords,values,boundary,save_path,country,vmin=vmin,vmax=vmax)
 
-def plot_values(coords,values,boundary,save_path,country,vmin=None,vmax=None):
+def plot_values(coords,values,boundary,save_path,country,title=None,vmin=None,vmax=None):
+    '''
+    Plots the values at the coordinates, with the country boundary.
+
+    coords: (n_points, 2) array of lat, lon. Can be a torch tensor or a numpy array.
+    values: (n_points,) array of values to plot. Can be a torch tensor or a numpy array.
+    boundary: GeoSeries containing the country boundary to plot.
+    save_path: if None, uses plt.show(), otherwise saves the figure to the given path
+    '''
     coords=to_numpy(coords)
     values=to_numpy(values)
     fig, ax = plt.subplots(figsize=(8, 10))
     boundary.plot(ax=ax, color="none", edgecolor="black")
     sc = ax.scatter(coords[:, 0], coords[:, 1], c=values, cmap='viridis', s=1, alpha=0.5,vmin=vmin, vmax=vmax)
     plt.colorbar(sc, ax=ax, label="Value")
-    ax.set_title(f"Image similarity over {country}")
+    if title is None:
+        title = f"Image similarity over {country}"
+    ax.set_title(title)
     if save_path is None:
         plt.show()
     else:
@@ -529,6 +544,10 @@ def plot_values(coords,values,boundary,save_path,country,vmin=None,vmax=None):
     
 
 def to_numpy(x):
+    '''
+    Converts a torch tensor to a numpy array, does nothing to a numpy array.
+    Used to handle both types.
+    '''
     if isinstance(x, np.ndarray):
         return x
     if torch.is_tensor(x):
@@ -595,19 +614,9 @@ def plot_species_density(df, species_name, country_name, grid_resolution=0.1, ba
 def get_species_emb(indices, dictionary, model,tokenizer, column_name="taxa_bioclip", device="cuda"):
     '''
     Takes in a np/torch array (n_batch,) of integers (indices).
-    Returns a (n_batch, d_encoding) of (bioCLIP) species_embeddings for the corresponding indices 
+    Returns a (n_batch, d_encoding) of (bioCLIP) species_embeddings for the corresponding indices
+
     The column containing the name information has to be in the dictionary.
-
-    bioclip is used with: 
-    model, preprocess_train, processor = open_clip.create_model_and_transforms('hf-hub:imageomics/bioclip-2')
-    tokenizer = open_clip.get_tokenizer('hf-hub:imageomics/bioclip-2')
-    model = model.to(device)
-    model.eval()
-
-    then ¨
-    text_tokens = tokenizer([species_name])
-    with torch.no_grad():
-    text_embedding = model.encode_text(text_tokens)
     '''
     np_idx=to_numpy(indices)
     species = dictionary[column_name].iloc[np_idx]
@@ -620,15 +629,12 @@ def get_example(dataset_path, idx,vector_name="vectors_bioclip"):
     with h5py.File(dataset_path, "r") as f:
         vector = f[vector_name][idx]  # <-- access the i-th vector directly
     return vector
-    # '''Fetches an example from the HDF5 dataset'''
-    # dataset=data_extraction.HDF5Dataset(dataset_path)
-    # emb_vector, coord , idx = dataset[idx]
-    # return emb_vector, coord, idx
 
 
 def get_run_name(base_name, cfg, sweep_keys):
     '''
-    returns the base name with the parameters concatenated
+    returns the base name with the parameters concatenated.
+    (Used for wandb sweep, to distinguish the runs more easily.)
     '''
     if wandb.run.sweep_id is None:
         return base_name
@@ -643,6 +649,10 @@ def get_run_name(base_name, cfg, sweep_keys):
     return "_".join(parts)
 
 def plot_image_from_index(data_dict, index, return_only=False):
+    '''
+    Downloads and plots the image corresponding to the given index in the data dictionary.
+    Either returns the PIL image (if return_only=True) or plots it directly.
+    '''
     url = data_dict.iloc[index]["identifier"]
     response = data_extraction.get(url)
     response.raise_for_status()
@@ -655,20 +665,6 @@ def plot_image_from_index(data_dict, index, return_only=False):
     plt.show()
 
 
-def configs_from_folder(checkpoint_folder):
-    '''
-    Works only for the contrastive folder name
-    '''
-    checkpoint_paths_model = []
-    for d in os.listdir(checkpoint_folder):
-        subdir = os.path.join(checkpoint_folder, d)
-        model_path = os.path.join(subdir, "model.pt")
-        if os.path.isdir(subdir) and "checkpoint_" in d:
-            if os.path.isfile(model_path):
-                checkpoint_paths_model.append(model_path)
-    return checkpoint_paths_model
-
-import re
 
 def configs_from_folder(checkpoint_folder,sort=True):
     '''
