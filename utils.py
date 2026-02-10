@@ -1,25 +1,17 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
-from torchvision import models
 import torch.nn as nn
 import torch
-import torchvision
-from torch.utils.data import DataLoader, Dataset,random_split, Subset
 import data_extraction
 from tqdm import tqdm
-from pyproj import Transformer
 import h5py
-from sklearn.decomposition import PCA
-import joblib
 from pathlib import Path
-from sklearn.preprocessing import StandardScaler
 import geopandas as gpd
 from shapely.geometry import Point
 from shapely.geometry import MultiPolygon
 from shapely import geometry as geom
 import regionmask
-import rasterio
 import open_clip
 import pandas as pd
 import wandb
@@ -28,69 +20,18 @@ import nn_classes
 import yaml
 from scipy.stats import gaussian_kde
 import re
-
-
+#local
 import train_contrastive
+import datasets
 
 
 
-def noise(input, std):
-    noise = np.random.normal(0, std, input.shape)  # Gaussian noise
-    noisy = input + noise
-    return noisy
-
-def show_image(img): #torch, numpy or PIL
-    if isinstance(img, torch.Tensor):
-        img = img.numpy()
-        img = img.transpose(1, 2, 0)
-    plt.figure(figsize=(4,4))
-    plt.imshow(img, cmap='gray', vmin=0, vmax=255)
-    plt.axis('off')  # hide axes
-    plt.show()
 
 
-class ImageFromDataframe(Dataset):
-    def __init__(self, dataframe, image_folder_path ,label_names=('decimalLatitude','decimalLongitude'), transform=None):
-        """
-        dataframe must have column 'gbifID',
-        and columns in label_names for the labels.
 
-        It uses the same idx than the one to name the image files, so please do not re-index the dataframe
-
-        image_folder_path must be the path to a folder containing the images, Not like ImageFolder!
-        """
-        self.dataframe = dataframe
-        self.label_names = label_names
-        self.transform = transform
-        self.image_folder_path=image_folder_path
-
-    def __len__(self):
-        return len(self.dataframe)
-
-    def __getitem__(self, idx):
-        img_path = f"{self.image_folder_path}/{idx}_{self.dataframe.loc[idx, 'gbifID']}.jpg"
-        labels = self.dataframe.loc[idx, list(self.label_names)].to_numpy(dtype='float32')
-        labels = torch.tensor(labels)       
-
-        image = Image.open(img_path).convert("RGB")
-
-        if self.transform:
-            image = self.transform(image)
-
-        return image, labels
     
 
-def dataloader_img(dataframe,image_folder_path,image_size,batch_size,shuffle=True):
-        transforms = torchvision.transforms.Compose([
-        torchvision.transforms.Resize(image_size, interpolation=torchvision.transforms.InterpolationMode.BILINEAR),  #as in HF
-        torchvision.transforms.CenterCrop(image_size),
-        torchvision.transforms.RandomHorizontalFlip(),
-        torchvision.transforms.ToTensor(),
-        torchvision.transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5)) #to [-1,1]
-        ])
-        dataset = ImageFromDataframe(dataframe, image_folder_path,label_names=('decimalLatitude','decimalLongitude'), transform=transforms)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
-        return dataloader
+
 
 '''
 def dataloader_emb(file_path,batch_size,shuffle=False,train_proportion=0.8): #from a h5 file
@@ -106,76 +47,7 @@ def dataloader_emb(file_path,batch_size,shuffle=False,train_proportion=0.8): #fr
     return train_loader, test_loader
     '''
 
-def dataloader_factory(file_path,config, dataframe=None):
-    '''
-    solves to the duplication problem, but needs to take a dataframe with gbifID column.
-    Also possible to use naively without the dataframe by setting sort_duplicates=False.
-    '''
-    # Gets some parameters from the config
-    vectors_name= config["vectors_name"]
-    spe_data_path=config['paths'][config["dataset"]]["specie_data"]
 
-    #Picks the right dataset class from the config
-    if config["use_species"]:
-        dataset=data_extraction.HDF5Dataset(file_path,data_name=vectors_name)
-        dataset_type="HDF5Dataset"
-    elif config["mixed_embeddings"]:
-        if dataframe is None or spe_data_path is None:
-            raise Exception(f" 'None' arguments passed to 'mixed_HDF5Dataset' ")
-        dataset=data_extraction.mixed_HDF5Dataset(file_path_images=file_path,file_path_spe=spe_data_path, dataframe=dataframe, data_name_images=vectors_name,mixed_data_method=config["mixed_data_method"])
-        dataset_type="mixed_HDF5Dataset"
-    else:
-        dataset=data_extraction.ordered_HDF5Dataset(file_path,dataframe,data_name=vectors_name)
-        dataset_type="ordered_HDF5Dataset"
-   
-    #get the sizes of the train and test sets
-    train_size = int(config["train_ratio"] * len(dataset))
-    test_size = len(dataset) - train_size
-
-    #ensure reproducibility
-    generator = torch.Generator().manual_seed(48)
-
-    #sorts the duplicates: several images corresponding to one occurence
-    if config["sort_duplicates"]:
-        if dataset_type=="HDF5Dataset": #The HDF5 class does not have a dataframe. The indices are stored in the HDF5 data (the hdf5 data is not necessarly ordered).
-            with h5py.File(file_path, "r") as f:
-                dict_indices = f["dict_idx"][:].flatten()
-        else:
-            dict_indices = dataset.dataframe.index
-        train_dataset, test_dataset=group_split(dataset,dict_indices, dataframe,generator, config["train_ratio"])
-    else:
-        train_dataset, test_dataset = random_split(dataset, [train_size, test_size],generator=generator)
-
-    #creates the dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=config["training"]["batch_size"], shuffle=config["shuffle"],drop_last=config["drop_last"],num_workers=config["dataloader_workers"])
-    test_loader = DataLoader(test_dataset, batch_size=config["training"]["batch_size"], shuffle=config["shuffle"],drop_last=config["drop_last"],num_workers=config["dataloader_workers"])
-    return train_loader, test_loader, dataset_type
-
-def group_split(dataset, dict_indices, dataframe,generator, train_ratio=0.8):
-    """Split dataset into train/test SUCH THAT samples with the same ID stay together.
-    Technically, there may be some variance to the training set proportion since not all Gbif indices have the same number of images."""
-    n = len(dataset)
-    # 1 — Extract IDs for each sample
-    ids = dataframe.loc[dict_indices, "gbifID"].values  
-    # 2 — Convert unique IDs to integers
-    unique_ids = sorted(set(ids))
-    id_to_int = {id_: i for i, id_ in enumerate(unique_ids)}
-    int_ids = torch.tensor([id_to_int[id_] for id_ in ids])
-    # 3 — Shuffle group IDs
-    num_groups = len(unique_ids)
-    perm = torch.randperm(num_groups, generator=generator)
-    # 4 — Split group IDs
-    test_size = int(num_groups * (1-train_ratio))
-    test_groups = set(perm[:test_size].tolist())
-    train_groups = set(perm[test_size:].tolist())
-    # 5 — Assign samples
-    train_indices = [i for i in range(n) if int_ids[i].item() in train_groups]
-    test_indices  = [i for i in range(n) if int_ids[i].item() in test_groups]
-    # 6 — Build subsets
-    train_dataset = Subset(dataset, train_indices)
-    test_dataset = Subset(dataset, test_indices)
-
-    return train_dataset, test_dataset
 
 
 
@@ -188,7 +60,7 @@ def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,
         dataframe=pd.read_csv(dataframe_path)
     else:
         dataframe=None
-    _ , dataloader=dataloader_factory(data_file_name,batch_size=nbr_samples,shuffle=True,sort_duplicates=sort_duplicates, dataframe=dataframe) #test set
+    _ , dataloader=datasets.dataloader_factory(data_file_name,batch_size=nbr_samples,shuffle=True,sort_duplicates=sort_duplicates, dataframe=dataframe) #test set
     doublenetwork.eval()
 
     data_iter = iter(dataloader)  # manual iterator
@@ -251,69 +123,9 @@ def plot_both(sim_data, asim_data, title, bins=50):
     plt.close()
 
 
-def coord_trans(x, y, order="CH_to_normal"):
 
-    if order == "CH_to_normal":
-        transformer = Transformer.from_crs("EPSG:21781", "EPSG:4326", always_xy=True)
-        x_out, y_out = transformer.transform(x, y)  # X=Easting, Y=Northing
-    elif order == "normal_to_CH":
-        transformer = Transformer.from_crs("EPSG:4326", "EPSG:21781", always_xy=True)
-        x_out, y_out = transformer.transform(x, y)  # X=Longitude, Y=Latitude
-    else:
-        raise ValueError("order must be either 'CH_to_normal' or 'normal_to_CH'")
-    return x_out, y_out
-
-def coord_trans_shift_old(x,y, order="CH_to_normal"):
-    "converts from the NCEAS dataset coordinates (they have a shift) to regular lat, lon (and vice versa)"
-    shift_x, shift_y= (1011627.4909483634, -100326.1477937577) #See "coordinates.ipynb"
-    if order=="CH_to_normal":
-        lons, lats = coord_trans(x-shift_x, y-shift_y,order="CH_to_normal")
-        return lons, lats
-    elif order =="normal_to_CH":
-        x_trans, y_trans=coord_trans(x, y, order= "normal_to_CH")
-        return x_trans+shift_x, y_trans+shift_y
-    
-def coord_trans_shift(x,y, order="CH_to_normal"):
-    "converts from the NCEAS dataset coordinates (they have a shift) to regular lat, lon (and vice versa)"
-    shift_x, shift_y= (1010927.4909483634, -101026.1477937577) # +700 for each, kinda random
-    if order=="CH_to_normal":
-        lons, lats = coord_trans(x-shift_x, y-shift_y,order="CH_to_normal")
-        return lons, lats
-    elif order =="normal_to_CH":
-        x_trans, y_trans=coord_trans(x, y, order= "normal_to_CH")
-        return x_trans+shift_x, y_trans+shift_y
-        
     
 
-def perform_PCA(dataloader, img_enc, device="cuda", file_name="pca_model", n_components=None, n_sample=None):
-    """load with pca_model = joblib.load('pca_model.pkl')"""
-    all_embeddings = []
-    
-    counter=0
-    for embeddings, labels, _ in tqdm(dataloader, desc="Computing embeddings for PCA"):
-        embeddings = embeddings.to(device)
-        embeddings = img_enc(embeddings)  # get the actual encoded vectors
-        all_embeddings.append(embeddings.detach().cpu().numpy())
-        counter+= embeddings.shape[0]
-        if n_sample is not None and counter>=n_sample:
-            break
-
-    embeddings = np.vstack(all_embeddings)
-    scaler = StandardScaler()
-    scaler.fit(embeddings)
-    embeddings = scaler.transform(embeddings)
-    pca = PCA(n_components=n_components)
-    pca.fit(embeddings)
-    joblib.dump(pca, f"PCA_models/{file_name}.pkl")
-
-
-
-def coord_to_PCA(coords, pos_enc,pca_model_path, comp_idx=1): 
-    '''takes coordinates and return the principal value associated to it. Considers the comp_idx-th component'''
-    pca_model=joblib.load(pca_model_path)
-    embeddings=pos_enc(coords).cpu()
-    vect_to_plot = pca_model.transform(embeddings.detach().numpy())
-    return vect_to_plot[:,comp_idx]
 
 def plot_country_values(country_name, fct_to_plot,pos_encoder,pca_model_path="PCA_All_comp_full_dataset_Normalized.pkl", grid_resolution=0.1, cmap='viridis',device="cuda",comp_idx=0,save_path=None,vmin=None,vmax=None):
     coords = create_country_grid(country_name, grid_resolution)
@@ -387,65 +199,8 @@ def get_encoders(model): #returns the position encoder and image encoder from th
         raise ValueError("do_and_plot_PCA: model does not have a recognized image encoder attribute")
     return pos_encoder, img_encoder
 
-def do_and_plot_PCA(model, data_path,pca_file_name,nbr_components=None, nbr_plots=3, batch_size=4064, sort_duplicates=False,dataframe=None,country_name="Switzerland",save_path_pic=None):
-
-    pos_encoder, img_encoder=get_encoders(model)
-
-    dataloader, _ =dataloader_factory(data_path,batch_size=batch_size, shuffle=True,train_ratio=0.8, sort_duplicates=sort_duplicates, dataframe=dataframe)
-    perform_PCA(dataloader, img_enc=img_encoder, device="cuda", file_name=pca_file_name, n_components=nbr_components, n_sample=None)
-
-    pca_model_path=f"PCA_models/{pca_file_name}.pkl"
-    
-    for i in range(nbr_plots):
-        plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=pos_encoder,pca_model_path=pca_model_path, grid_resolution=0.01, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path_pic)
-
-def plot_PCA(pca_model_path,nbr_plots,pos_encoder,country_name="Switzerland",save_path=None):
-    for i in range(nbr_plots):
-        plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=pos_encoder,pca_model_path=pca_model_path, grid_resolution=0.01, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path)
 
 
-def NCEAS_covariates(lon, lat, directory="embeddings_data_and_dictionaries/data_SDM_NCEAS/Environnement", return_dict=True):
-    """
-    Fetch raster values for given lon/lat coordinates from all .tif files in a directory.
-    
-    Parameters:
-        lon (array-like): Longitudes
-        lat (array-like): Latitudes
-        directory (str or Path): Path to folder containing .tif raster files
-    
-    Returns: either a dataframe or an np array, depending on the argumennt "return_dict"
-        dict: Keys are raster filenames (without extension), values are arrays of sampled values
-        
-    """
-    directory = Path(directory)
-    
-    # Transform coordinates
-    x, y = coord_trans_shift(lon, lat, order="normal_to_CH") #error?
-    points = np.column_stack([x, y])  # shape (n_points, 2)
-    
-    # Get all .tif files
-    tif_files = sorted(directory.glob("*.tif"))
-    
-    if len(tif_files) == 0:
-        print("No TIFF files found in directory:", directory)
-        return {}
-    
-    # Dictionary to hold values from all rasters
-    all_values = {}
-    
-    for tif_path in tif_files:
-        with rasterio.open(tif_path) as src:
-            # Sample raster at given points
-            values = np.array([v[0] for v in src.sample(points)])
-            all_values[tif_path.stem] = values  # use filename without extension as key
-    
-    if return_dict:
-        return all_values
-    else:
-        # Stack values into a 2D array: shape (num_points, num_rasters)
-        # Order of columns matches tif_files
-        array_values = np.column_stack([all_values[tif_path.stem] for tif_path in tif_files])
-        return array_values
 
 def print_model(model_path):
     ckpt = torch.load(model_path, map_location="cpu")

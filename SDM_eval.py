@@ -1,5 +1,3 @@
-import utils
-import nn_classes
 import torch.nn as nn
 import torch
 from tqdm import tqdm
@@ -17,9 +15,10 @@ from sklearn.multioutput import MultiOutputClassifier
 import yaml
 from nn_classes import MLP
 import os
-from geoclip import LocationEncoder
 import warnings
-from collections import OrderedDict
+#local
+import NCEAS
+import nn_classes
     
 def train_one_MLP(model, X, y, epochs=200, batch_size=250, lr=1e-4):
     model=model.to("cuda")
@@ -114,9 +113,9 @@ def get_data_NCEAS(po_data_path="Data/data_SDM_NCEAS/SWItrain_po.csv",
     X_test_cov=X_test_cov.to_numpy()
     y_test=y_test.to_numpy()
     # Coords so we can get embeddings later
-    lons_po, lats_po = utils.coord_trans_shift(po_data["x"].values, po_data["y"].values,order="CH_to_normal")
+    lons_po, lats_po = NCEAS.coord_trans_shift(po_data["x"].values, po_data["y"].values,order="CH_to_normal")
     coords_po = np.column_stack((lats_po, lons_po))
-    lons_pa, lats_pa = utils.coord_trans_shift(pa_data["x"].values, pa_data["y"].values,order="CH_to_normal")   
+    lons_pa, lats_pa = NCEAS.coord_trans_shift(pa_data["x"].values, pa_data["y"].values,order="CH_to_normal")   
     coords_pa = np.column_stack((lats_pa, lons_pa))
 
     return X_cov, y,coords_po, X_test_cov, y_test , coords_pa

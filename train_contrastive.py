@@ -14,7 +14,8 @@ from sklearn.preprocessing import StandardScaler
 import open_clip
 import warnings
 import wandb
-
+#local
+import NCEAS
 import utils
 import nn_classes
 import data_extraction
@@ -195,7 +196,7 @@ def get_modalities(modality_names, images, coords, idx, covariate_names, datafra
         results["coords"] = coords
     if "NCEAS" in modality_names: # gets covariates instead of coordinates
         coords=coords.cpu().detach().numpy()
-        NCEAS_covariates=utils.NCEAS_covariates(coords[:,1],coords[:,0], return_dict=True) #this function take lon, lat
+        NCEAS_covariates=NCEAS.NCEAS_covariates(coords[:,1],coords[:,0], return_dict=True) #this function take lon, lat
         NCEAS_covariates = np.column_stack([NCEAS_covariates[cov] for cov in covariate_names])  #keeps the right order for scaling
         NCEAS_covariates=scaler.transform(NCEAS_covariates)
         results["NCEAS"] = torch.tensor(NCEAS_covariates).to(device)

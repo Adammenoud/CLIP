@@ -15,6 +15,7 @@ from pytorch_lightning.loggers import WandbLogger
 from pathlib import Path
 #local:
 import utils
+import datasets
 import nn_classes
 import data_extraction
 import hdf5
@@ -91,7 +92,7 @@ dataframe=pd.read_csv(dict_path)
 
 print("spliting data")
 difference=None #compatibility
-dataloader, test_dataloader, dataset_type =utils.dataloader_factory(file_path,
+dataloader, test_dataloader, dataset_type =datasets.dataloader_factory(file_path,
                                                   static_cfg, 
                                                   dataframe=dataframe,
                                                   )

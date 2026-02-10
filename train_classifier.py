@@ -1,45 +1,13 @@
 #imports:
 from typing import override
-import numpy as np
-from PIL import Image
-import matplotlib.pyplot as plt
-
-from torchvision import models
-import torchvision
-from torch.utils.data import DataLoader
-import torch.nn as nn
 import torch
 import torch.nn.functional as F
-import math
-from torch.utils.tensorboard import SummaryWriter
-import pandas as pd
-from torchinfo import summary
-#local:
-import utils
-import nn_classes
-import data_extraction
-import hdf5
-import torch
-from geoclip import LocationEncoder
-import os
-
-from torchvision import models
-import torch.nn as nn
-import torch
 from tqdm import tqdm
-from torch.utils.tensorboard import SummaryWriter
-import json
-from datetime import datetime
-from torchinfo import summary
-import utils
-import numpy as np
 import lightning as L
-from lightning.pytorch.callbacks import ModelCheckpoint
-import wandb
-from pytorch_lightning.loggers import WandbLogger
+import os
+#local:
+import data_extraction
 
-# import heartrate
-# heartrate.trace(browser=False, port=9999)
 
 
 
