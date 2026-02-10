@@ -89,16 +89,16 @@ class GeneralLoop(L.LightningModule):
       
 class Classifier_train(GeneralLoop):
     '''Overwirites the forward and target, training specific to classifier
-        We train from the hp5 file, it would be more optimal from a dictionary directly
+        We train from the hp5 file, it would be more optimal from a dataframe directly
         Model's output must match the number of species
     '''
-    def __init__(self, model, dictionary,save_name ,loss=F.cross_entropy,name_training_loss="Cross-entropy", name_val_loss="CE on test set", lr=1e-4,class_name="scientificName"):
+    def __init__(self, model, dataframe,save_name ,loss=F.cross_entropy,name_training_loss="Cross-entropy", name_val_loss="CE on test set", lr=1e-4,class_name="scientificName"):
         super().__init__(model, loss, save_name ,name_training_loss, name_val_loss, lr)
 
-        self.dictionary=dictionary
-        if dictionary is not None:
+        self.dataframe=dataframe
+        if dataframe is not None:
                 class_dict = data_extraction.species_classIdx_dict(
-                    dictionary, class_name=class_name
+                    dataframe, class_name=class_name
                 )
                 class_lookup = torch.tensor(
                     class_dict["class_idx"].values,

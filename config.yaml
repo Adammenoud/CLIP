@@ -4,32 +4,35 @@
 dataset: plants        # Default, overridden by sweep
 vectors_name: vectors_bioclip # Default, overridden by sweep
 use_species: False #with vectors_name: vectors
-difference: False #If using mixed_HDF5Dataset, in the contrastive case, can be overriden by sweep
+
+
+mixed_embeddings: False #uses both the image and species embeddings for training. Operation between those are handled in the "mixed_HDF5Dataset" class
+mixed_data_method: difference
 
 shuffle: True
 train_ratio: 0.8
 sort_duplicates: True 
 drop_last: True
-dataset_type: mixed_HDF5Dataset #ordered_HDF5Dataset
+dataloader_workers: 16
 
 paths:
   arthropods:
-    data: Embeddings_and_dictionaries/arthropods/embeddings_inaturalist_FR_arthropods.h5
-    specie_data: Embeddings_and_dictionaries/arthropods/species_embeddings_inaturalist_FR_arthropods.h5
-    dict: Embeddings_and_dictionaries/arthropods/dictionary_inaturalist_FR_arthropods
+    data: Embeddings_and_dataframes/arthropods/embeddings_inaturalist_FR_arthropods.h5
+    specie_data: Embeddings_and_dataframes/arthropods/species_embeddings_inaturalist_FR_arthropods.h5
+    dict: Embeddings_and_dataframes/arthropods/dictionary_inaturalist_FR_arthropods
   mushrooms:
-    data: Embeddings_and_dictionaries/mushrooms/embeddings_inaturalist_FR_mushrooms.h5
-    specie_data: Embeddings_and_dictionaries/mushrooms/species_embeddings_inaturalist_FR_mushrooms.h5
-    dict: Embeddings_and_dictionaries/mushrooms/dictionary_inaturalist_FR_mushrooms
+    data: Embeddings_and_dataframes/mushrooms/embeddings_inaturalist_FR_mushrooms.h5
+    specie_data: Embeddings_and_dataframes/mushrooms/species_embeddings_inaturalist_FR_mushrooms.h5
+    dict: Embeddings_and_dataframes/mushrooms/dictionary_inaturalist_FR_mushrooms
   plants:
-    data: Embeddings_and_dictionaries/plants/embeddings_inaturalist_FR_plants.h5
-    specie_data: Embeddings_and_dictionaries/plants/species_embeddings_inaturalist_FR_plants.h5
-    dict: Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants
+    data: Embeddings_and_dataframes/plants/embeddings_inaturalist_FR_plants.h5
+    specie_data: Embeddings_and_dataframes/plants/species_embeddings_inaturalist_FR_plants.h5
+    dict: Embeddings_and_dataframes/plants/dictionary_inaturalist_FR_plants
 
   pl@ntnet: #meaning, pl@ntnet with bioclip encoder: vector name: "vectors"
-    data: Embeddings_and_dictionaries/Plantnet_old/Bioclip_encoder/bioCLIP_full_dataset_embeddings.h5
-    specie_data: Embeddings_and_dictionaries/Plantnet_old/Bioclip_encoder/bioCLIP_species_embeddings.h5
-    dict: Embeddings_and_dictionaries/Plantnet_old/Bioclip_encoder/bioclip_data_dictionary_all_taxons
+    data: Embeddings_and_dataframes/Plantnet_old/Bioclip_encoder/bioCLIP_full_dataset_embeddings.h5
+    specie_data: Embeddings_and_dataframes/Plantnet_old/Bioclip_encoder/bioCLIP_species_embeddings.h5
+    dict: Embeddings_and_dataframes/Plantnet_old/Bioclip_encoder/bioclip_data_dictionary_all_taxons
 
 
 
@@ -61,7 +64,8 @@ model_params:
     modalities: #yaml list, will be loaded as a python list
       - images
       - coords
-    embedding_size: 1536 #2*768
+    image_embedding_size: 768 #2*768
+    contrastive_embedding_size: 3
   classifier:
     class_column: species
     loss: "MSE" #"cross_entropy", MSE
@@ -71,10 +75,10 @@ model_params:
 # ----------------------------
 # Optional: save name pattern
 # ----------------------------
-run_name: "species_and_images_embeddings_contrastive"
+run_name: "3dimensional_embedding_space" #overridden by sweep
 
 wandb:
-  project: contrastive_learning
+  project: contrastive_learning #overidden by sweep
   entity: adammenoud
 
 

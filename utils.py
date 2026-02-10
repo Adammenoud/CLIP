@@ -49,27 +49,27 @@ def show_image(img): #torch, numpy or PIL
     plt.show()
 
 
-class ImageFromDictionary(Dataset):
-    def __init__(self, dictionary, image_folder_path ,label_names=('decimalLatitude','decimalLongitude'), transform=None):
+class ImageFromDataframe(Dataset):
+    def __init__(self, dataframe, image_folder_path ,label_names=('decimalLatitude','decimalLongitude'), transform=None):
         """
-        dictionary must have column 'gbifID',
+        dataframe must have column 'gbifID',
         and columns in label_names for the labels.
 
-        It uses the same idx than the one to name the image files, so please do not re-index the dictionary
+        It uses the same idx than the one to name the image files, so please do not re-index the dataframe
 
         image_folder_path must be the path to a folder containing the images, Not like ImageFolder!
         """
-        self.dictionary = dictionary
+        self.dataframe = dataframe
         self.label_names = label_names
         self.transform = transform
         self.image_folder_path=image_folder_path
 
     def __len__(self):
-        return len(self.dictionary)
+        return len(self.dataframe)
 
     def __getitem__(self, idx):
-        img_path = f"{self.image_folder_path}/{idx}_{self.dictionary.loc[idx, 'gbifID']}.jpg"
-        labels = self.dictionary.loc[idx, list(self.label_names)].to_numpy(dtype='float32')
+        img_path = f"{self.image_folder_path}/{idx}_{self.dataframe.loc[idx, 'gbifID']}.jpg"
+        labels = self.dataframe.loc[idx, list(self.label_names)].to_numpy(dtype='float32')
         labels = torch.tensor(labels)       
 
         image = Image.open(img_path).convert("RGB")
@@ -80,7 +80,7 @@ class ImageFromDictionary(Dataset):
         return image, labels
     
 
-def dataloader_img(dictionary,image_folder_path,image_size,batch_size,shuffle=True):
+def dataloader_img(dataframe,image_folder_path,image_size,batch_size,shuffle=True):
         transforms = torchvision.transforms.Compose([
         torchvision.transforms.Resize(image_size, interpolation=torchvision.transforms.InterpolationMode.BILINEAR),  #as in HF
         torchvision.transforms.CenterCrop(image_size),
@@ -88,7 +88,7 @@ def dataloader_img(dictionary,image_folder_path,image_size,batch_size,shuffle=Tr
         torchvision.transforms.ToTensor(),
         torchvision.transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5)) #to [-1,1]
         ])
-        dataset = ImageFromDictionary(dictionary, image_folder_path,label_names=('decimalLatitude','decimalLongitude'), transform=transforms)
+        dataset = ImageFromDataframe(dataframe, image_folder_path,label_names=('decimalLatitude','decimalLongitude'), transform=transforms)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
         return dataloader
 
@@ -106,47 +106,57 @@ def dataloader_emb(file_path,batch_size,shuffle=False,train_proportion=0.8): #fr
     return train_loader, test_loader
     '''
 
-def dataloader_emb(file_path,batch_size,shuffle=False,train_ratio=0.8, sort_duplicates=True, dictionary=None,drop_last=True, dataset_type="HDF5_dataset", vectors_name="vectors",spe_data_path=None,difference=False,num_workers=16): #from a h5 file
+def dataloader_factory(file_path,config, dataframe=None):
     '''
-    solves to the duplication problem, but needs to take a dictionary with gbifID column.
-    Also possible to use naively without the dictionary by setting sort_duplicates=False.
+    solves to the duplication problem, but needs to take a dataframe with gbifID column.
+    Also possible to use naively without the dataframe by setting sort_duplicates=False.
     '''
-    if dataset_type == "HDF5Dataset":
-        dataset=data_extraction.HDF5Dataset(file_path,data_name=vectors_name)
-    elif dataset_type == "ordered_HDF5Dataset":
-        dataset=data_extraction.ordered_HDF5Dataset(file_path,dictionary,data_name=vectors_name)
-    elif dataset_type == "mixed_HDF5Dataset":
-        if dictionary is None or spe_data_path is None:
-            raise Exception(f" 'None' arguments passed to 'mixed_HDF5Dataset' ")
-        dataset=data_extraction.mixed_HDF5Dataset(file_path_images=file_path,file_path_spe=spe_data_path, dictionary=dictionary, data_name_images=vectors_name,difference=difference)
-    else:
-        raise Exception(f"invalid 'dataset_type' argument: found '{dataset_type}' instead of 'HDF5Dataset' or 'ordered_HDF5Dataset' or 'mixed_HDF5Dataset' ")
+    # Gets some parameters from the config
+    vectors_name= config["vectors_name"]
+    spe_data_path=config['paths'][config["dataset"]]["specie_data"]
 
-    train_size = int(train_ratio * len(dataset))
+    #Picks the right dataset class from the config
+    if config["use_species"]:
+        dataset=data_extraction.HDF5Dataset(file_path,data_name=vectors_name)
+        dataset_type="HDF5Dataset"
+    elif config["mixed_embeddings"]:
+        if dataframe is None or spe_data_path is None:
+            raise Exception(f" 'None' arguments passed to 'mixed_HDF5Dataset' ")
+        dataset=data_extraction.mixed_HDF5Dataset(file_path_images=file_path,file_path_spe=spe_data_path, dataframe=dataframe, data_name_images=vectors_name,mixed_data_method=config["mixed_data_method"])
+        dataset_type="mixed_HDF5Dataset"
+    else:
+        dataset=data_extraction.ordered_HDF5Dataset(file_path,dataframe,data_name=vectors_name)
+        dataset_type="ordered_HDF5Dataset"
+   
+    #get the sizes of the train and test sets
+    train_size = int(config["train_ratio"] * len(dataset))
     test_size = len(dataset) - train_size
 
+    #ensure reproducibility
     generator = torch.Generator().manual_seed(48)
-    if sort_duplicates:
-        if dataset_type == "HDF5Dataset":
+
+    #sorts the duplicates: several images corresponding to one occurence
+    if config["sort_duplicates"]:
+        if dataset_type=="HDF5Dataset": #The HDF5 class does not have a dataframe. The indices are stored in the HDF5 data (the hdf5 data is not necessarly ordered).
             with h5py.File(file_path, "r") as f:
                 dict_indices = f["dict_idx"][:].flatten()
-        elif dataset_type == "ordered_HDF5Dataset" or dataset_type == "mixed_HDF5Dataset":
-            dict_indices = dataset.dictionary.index
-        train_dataset, test_dataset=group_split(dataset,dict_indices, dictionary,generator, train_ratio)
+        else:
+            dict_indices = dataset.dataframe.index
+        train_dataset, test_dataset=group_split(dataset,dict_indices, dataframe,generator, config["train_ratio"])
     else:
         train_dataset, test_dataset = random_split(dataset, [train_size, test_size],generator=generator)
 
+    #creates the dataloaders
+    train_loader = DataLoader(train_dataset, batch_size=config["training"]["batch_size"], shuffle=config["shuffle"],drop_last=config["drop_last"],num_workers=config["dataloader_workers"])
+    test_loader = DataLoader(test_dataset, batch_size=config["training"]["batch_size"], shuffle=config["shuffle"],drop_last=config["drop_last"],num_workers=config["dataloader_workers"])
+    return train_loader, test_loader, dataset_type
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle,drop_last=drop_last,num_workers=num_workers)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=shuffle,drop_last=drop_last,num_workers=num_workers)
-    return train_loader, test_loader
-
-def group_split(dataset, dict_indices, dictionary,generator, train_ratio=0.8):
+def group_split(dataset, dict_indices, dataframe,generator, train_ratio=0.8):
     """Split dataset into train/test SUCH THAT samples with the same ID stay together.
     Technically, there may be some variance to the training set proportion since not all Gbif indices have the same number of images."""
     n = len(dataset)
     # 1 — Extract IDs for each sample
-    ids = dictionary.loc[dict_indices, "gbifID"].values  
+    ids = dataframe.loc[dict_indices, "gbifID"].values  
     # 2 — Convert unique IDs to integers
     unique_ids = sorted(set(ids))
     id_to_int = {id_: i for i, id_ in enumerate(unique_ids)}
@@ -169,16 +179,16 @@ def group_split(dataset, dict_indices, dictionary,generator, train_ratio=0.8):
 
 
 
-def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,device="cuda", plot_sims=True,sort_duplicates=True, dictionary_path="embeddings_data_and_dictionaries/data_dictionary_sciName", modalities=["images","coords"]):
+def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,device="cuda", plot_sims=True,sort_duplicates=True, dataframe_path=None, modalities=["images","coords"]):
     '''Picks random samples and gives the (average) similarity between the image emmbedding and the coordinate embedding
-    dictionary is used to get the dataloader. It can be set to None, together with
+    dataframe is used to get the dataloader. It can be set to None, together with
     '''
     tokenizer, scaler, bioclip= train_contrastive.prepare_modality_tools(modalities)
-    if dictionary_path is not None:
-        dictionary=pd.read_csv(dictionary_path)
+    if dataframe_path is not None:
+        dataframe=pd.read_csv(dataframe_path)
     else:
-        dictionary=None
-    _ , dataloader=dataloader_emb(data_file_name,batch_size=nbr_samples,shuffle=True,sort_duplicates=sort_duplicates, dictionary=dictionary) #test set
+        dataframe=None
+    _ , dataloader=dataloader_factory(data_file_name,batch_size=nbr_samples,shuffle=True,sort_duplicates=sort_duplicates, dataframe=dataframe) #test set
     doublenetwork.eval()
 
     data_iter = iter(dataloader)  # manual iterator
@@ -197,7 +207,7 @@ def test_similarity(data_file_name, doublenetwork, nbr_iter=1000, nbr_samples=2,
         emb_vectors = emb_vectors.to(device)
         coord = coord.to(device)
         idx=idx = idx.numpy().reshape(-1).tolist()
-        mod= train_contrastive.get_modalities(modalities, emb_vectors, coord, idx, ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"], dictionary, scaler, bioclip, tokenizer, device="cuda")
+        mod= train_contrastive.get_modalities(modalities, emb_vectors, coord, idx, ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"], dataframe, scaler, bioclip, tokenizer, device="cuda")
         logits=doublenetwork(mod[0],mod[1])
 
         logits=logits/doublenetwork.logit_scale.exp()
@@ -377,11 +387,11 @@ def get_encoders(model): #returns the position encoder and image encoder from th
         raise ValueError("do_and_plot_PCA: model does not have a recognized image encoder attribute")
     return pos_encoder, img_encoder
 
-def do_and_plot_PCA(model, data_path,pca_file_name,nbr_components=None, nbr_plots=3, batch_size=4064, sort_duplicates=False,dictionary=None,country_name="Switzerland",save_path_pic=None):
+def do_and_plot_PCA(model, data_path,pca_file_name,nbr_components=None, nbr_plots=3, batch_size=4064, sort_duplicates=False,dataframe=None,country_name="Switzerland",save_path_pic=None):
 
     pos_encoder, img_encoder=get_encoders(model)
 
-    dataloader, _ =dataloader_emb(data_path,batch_size=batch_size, shuffle=True,train_ratio=0.8, sort_duplicates=sort_duplicates, dictionary=dictionary)
+    dataloader, _ =dataloader_factory(data_path,batch_size=batch_size, shuffle=True,train_ratio=0.8, sort_duplicates=sort_duplicates, dataframe=dataframe)
     perform_PCA(dataloader, img_enc=img_encoder, device="cuda", file_name=pca_file_name, n_components=nbr_components, n_sample=None)
 
     pca_model_path=f"PCA_models/{pca_file_name}.pkl"
@@ -403,7 +413,7 @@ def NCEAS_covariates(lon, lat, directory="embeddings_data_and_dictionaries/data_
         lat (array-like): Latitudes
         directory (str or Path): Path to folder containing .tif raster files
     
-    Returns: either a dictionary or an np array, depending on the argumennt "return_dict"
+    Returns: either a dataframe or an np array, depending on the argumennt "return_dict"
         dict: Keys are raster filenames (without extension), values are arrays of sampled values
         
     """
@@ -454,17 +464,17 @@ def print_model(model_path):
             print(f"{k:40s}: NON-TENSOR ({type(v)})")
 
 
-def get_gbif_covariates(dictionary, idx_list, covariate_list=['scientificName']):
-    '''looks into the dictionary to get the data corespondint to the indices.
-        the covariates must be columns in the dictionary.
+def get_gbif_covariates(dataframe, idx_list, covariate_list=['scientificName']):
+    '''looks into the dataframe to get the data corespondint to the indices.
+        the covariates must be columns in the dataframe.
         retrun: (len(idx_list), len(covariate_list)) array
     '''
     # Ensure all requested covariates exist in the DataFrame
-    missing_cols = [col for col in covariate_list if col not in dictionary.columns]
+    missing_cols = [col for col in covariate_list if col not in dataframe.columns]
     if missing_cols:
         raise ValueError(f"The following covariates are missing in the DataFrame: {missing_cols}")
     # Select rows and columns, convert to numpy array
-    selected_data = dictionary.loc[idx_list, covariate_list].to_numpy()
+    selected_data = dataframe.loc[idx_list, covariate_list].to_numpy()
     return selected_data
 
 
@@ -611,15 +621,15 @@ def plot_species_density(df, species_name, country_name, grid_resolution=0.1, ba
     
 
 
-def get_species_emb(indices, dictionary, model,tokenizer, column_name="taxa_bioclip", device="cuda"):
+def get_species_emb(indices, dataframe, model,tokenizer, column_name="taxa_bioclip", device="cuda"):
     '''
     Takes in a np/torch array (n_batch,) of integers (indices).
     Returns a (n_batch, d_encoding) of (bioCLIP) species_embeddings for the corresponding indices
 
-    The column containing the name information has to be in the dictionary.
+    The column containing the name information has to be in the dataframe.
     '''
     np_idx=to_numpy(indices)
-    species = dictionary[column_name].iloc[np_idx]
+    species = dataframe[column_name].iloc[np_idx]
     tokens= tokenizer(species).to(device)
     with torch.no_grad():
         embeddings = model.encode_text(tokens)
@@ -648,12 +658,12 @@ def get_run_name(base_name, cfg, sweep_keys):
             parts.append(str(val))
     return "_".join(parts)
 
-def plot_image_from_index(data_dict, index, return_only=False):
+def plot_image_from_index(dataframe, index, return_only=False):
     '''
-    Downloads and plots the image corresponding to the given index in the data dictionary.
+    Downloads and plots the image corresponding to the given index in the data dataframe.
     Either returns the PIL image (if return_only=True) or plots it directly.
     '''
-    url = data_dict.iloc[index]["identifier"]
+    url = dataframe.iloc[index]["identifier"]
     response = data_extraction.get(url)
     response.raise_for_status()
 

@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 
 #data available at https://api.gbif.org/v1/occurrence/download/request/0015029-251025141854904.zip
 
-def get_dictionary(nbr_images, path_occurences, path_multimedia, extra_occ_columns=None, sep="\t"):
+def get_dataframe(nbr_images, path_occurences, path_multimedia, extra_occ_columns=None, sep="\t"):
     # Load (takes about 3 min)
     occurrences = pd.read_csv(path_occurences, sep=sep, low_memory=False)
     multimedia = pd.read_csv(path_multimedia, sep=sep, low_memory=False)
@@ -46,7 +46,7 @@ def get_dictionary(nbr_images, path_occurences, path_multimedia, extra_occ_colum
 #"individualCount", "coordinateUncertaintyInMeters", "coordinatePrecision", "taxonID", "scientificNameID" , "acceptedNameUsageID" , "parentNameUsageID", "originalNameUsageID", "scientificName"
 #class	order	superfamily	family	subfamily	tribe	subtribe	genus	genericName	subgenus
 
-def download_imgs(dictionary, output_dir="downloaded_images/all_images"):
+def download_imgs(dataframe, output_dir="downloaded_images/all_images"):
     """
     Mind the name under which images are registered:
     {idx}_{row['gbifID']}.jpg
@@ -54,7 +54,7 @@ def download_imgs(dictionary, output_dir="downloaded_images/all_images"):
     os.makedirs(output_dir, exist_ok=True)
 
     # Wrap iterrows with tqdm
-    for idx, row in tqdm(dictionary.iterrows(), total=len(dictionary), desc="Downloading images"):
+    for idx, row in tqdm(dataframe.iterrows(), total=len(dataframe), desc="Downloading images"):
         url = row['identifier']
         if pd.notna(url):
             response = requests.get(url)
@@ -66,7 +66,7 @@ def download_imgs(dictionary, output_dir="downloaded_images/all_images"):
                 print(f"Failed to download {url}")
 
 '''
-def download_emb(dictionary, dim_emb,output_dir="downloaded_embeddings",device="cuda"):
+def download_emb(dataframe, dim_emb,output_dir="downloaded_embeddings",device="cuda"):
     #Mind the name under which images are registered:  {idx}_{row['gbifID']}.jpg
 
     # Create folder for embeddings
@@ -78,7 +78,7 @@ def download_emb(dictionary, dim_emb,output_dir="downloaded_embeddings",device="
     model = AutoModel.from_pretrained('facebook/dinov2-base').to(device)
 
     # Loop over rows
-    for idx, row in tqdm(dictionary.iterrows(), total=dictionary.shape[0], desc="Downloading embeddings"):
+    for idx, row in tqdm(dataframe.iterrows(), total=dataframe.shape[0], desc="Downloading embeddings"):
         url = row['identifier']
         if pd.notna(url):
             response = requests.get(url, stream=True)
@@ -109,7 +109,7 @@ def log_error(row, error_msg, ERROR_FILE,error_lock):
         with open(ERROR_FILE, "a", encoding="utf-8") as f:
             f.write(f"{row.to_dict()}\t{error_msg}\n")
 
-def process_row(row, processor_dino, processor_bioclip, model_dino,model_bioclip, device, dictionary, tokenizer_bioclip,ERROR_FILE,error_lock):
+def process_row(row, processor_dino, processor_bioclip, model_dino,model_bioclip, device, dataframe, tokenizer_bioclip,ERROR_FILE,error_lock):
     """Download image, compute embedding, return embedding and coordinates.
         Each coordinate is a 2 elements array with order lat, lon
     """
@@ -144,25 +144,25 @@ def process_row(row, processor_dino, processor_bioclip, model_dino,model_bioclip
         cls_embedding_bioclip = outputs_bioclip.cpu().numpy()
         coordinates = np.array([[row['decimalLatitude'], row['decimalLongitude']]])
         #if difference:
-            #specie_emb= utils.get_species_emb(np.array([row.name]), dictionary, model,tokenizer, column_name="taxa_bioclip", device="cuda")
+            #specie_emb= utils.get_species_emb(np.array([row.name]), dataframe, model,tokenizer, column_name="taxa_bioclip", device="cuda")
             #cls_embedding=cls_embedding - specie_emb.cpu().numpy()
         return cls_embedding_bioclip,cls_embedding_dino , coordinates
     except Exception as e:
         print(f"Error processing {url}: {e}")
         return None
 
-def download_emb(dictionary, dim_emb, output_dir="downloaded_embeddings", device="cuda", max_workers=8):
+def download_emb(dataframe, dim_emb, output_dir="downloaded_embeddings", device="cuda", max_workers=8):
     """Download images and compute embeddings in parallel.
         Each coordinate is a 2 elements array with order lat, lon
         File registered as output_dir + ".h5"
-        assumes the dictionary has every index
+        assumes the dataframe has every index
     """
     #error management
     error_lock = threading.Lock()
     ERROR_FILE = output_dir+ "_error_rows.txt"
     #Create HDF5
     file = h5py.File(output_dir + ".h5", "w")
-    N = len(dictionary)
+    N = len(dataframe)
     vectors_bioclip = file.create_dataset(
         "vectors_bioclip", shape=(N, dim_emb), dtype="float32")
     vectors_dino = file.create_dataset(
@@ -183,10 +183,10 @@ def download_emb(dictionary, dim_emb, output_dir="downloaded_embeddings", device
 
     # Parallel processing
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_idx = {executor.submit(process_row, row, processor_dino, processor_bioclip, model_dino,model_bioclip, device, dictionary, tokenizer_bioclip,ERROR_FILE,error_lock): idx  #syntax: .submit(function, arg1, arg2, ...). Basically, an ashychronous "for" loop on idx, row that tracks the output of process_row, and index it on idx
-                         for idx, row in dictionary.iterrows()}
+        future_to_idx = {executor.submit(process_row, row, processor_dino, processor_bioclip, model_dino,model_bioclip, device, dataframe, tokenizer_bioclip,ERROR_FILE,error_lock): idx  #syntax: .submit(function, arg1, arg2, ...). Basically, an ashychronous "for" loop on idx, row that tracks the output of process_row, and index it on idx
+                         for idx, row in dataframe.iterrows()}
 
-        for future in tqdm(as_completed(future_to_idx), total=dictionary.shape[0], desc="Downloading embeddings"):
+        for future in tqdm(as_completed(future_to_idx), total=dataframe.shape[0], desc="Downloading embeddings"):
             res = future.result()
             idx = future_to_idx[future]  # original DataFrame index
             if res is not None:
@@ -197,7 +197,7 @@ def download_emb(dictionary, dim_emb, output_dir="downloaded_embeddings", device
                 valid[idx] = True
             else:
                 valid[idx] = False
-                print(f"Warning: failed to process row {idx}, URL: {dictionary.loc[idx, 'identifier']}")
+                print(f"Warning: failed to process row {idx}, URL: {dataframe.loc[idx, 'identifier']}")
 
     file.close()
 
@@ -238,11 +238,11 @@ class mixed_HDF5Dataset(Dataset):
     Specie embeddings have to be ordered as well, otherwise there will be an error.
     '''
 
-    def __init__(self, file_path_images,file_path_spe, dictionary, data_name_images="vectors_bioclip",data_name_spe="vectors", label_name="coordinates",valid_name="valid", do_valid=True,difference=False):
-        self.images_dataset=ordered_HDF5Dataset(file_path_images, dictionary, data_name=data_name_images, label_name=label_name,valid_name=valid_name, do_valid=do_valid)
+    def __init__(self, file_path_images,file_path_spe, dataframe, data_name_images="vectors_bioclip",data_name_spe="vectors", label_name="coordinates",valid_name="valid", do_valid=True,difference=False):
+        self.images_dataset=ordered_HDF5Dataset(file_path_images, dataframe, data_name=data_name_images, label_name=label_name,valid_name=valid_name, do_valid=do_valid)
         self.spe_dataset=HDF5Dataset(file_path_spe, data_name=data_name_spe, label_name=label_name)
         self.difference=difference
-        self.dictionary=dictionary
+        self.dataframe=dataframe
 
     def __len__(self):
         return len(self.images_dataset) #spe_data should have all entries
@@ -263,41 +263,41 @@ class mixed_HDF5Dataset(Dataset):
 
 class ordered_HDF5Dataset(Dataset):
     '''
-    This class assumes that the HDF5 indices correspond to indices of the dictionary.
+    This class assumes that the HDF5 indices correspond to indices of the dataframe.
     (This requirement is fullfilled using the most recent download_emb function.)
 
-    It allows taking a subset by first filtering the dictionary.
-    Note that some downloads may have failed, thus some rows of the dictionary will also not be used in the dataset.
+    It allows taking a subset by first filtering the dataframe.
+    Note that some downloads may have failed, thus some rows of the dataframe will also not be used in the dataset.
     The rows that are filled with "None" should be identifiable from a mask hdf5 dataset, here "valid".
 
     The names of the hdf5 datasets downloaded with download_embeddings are: "vectors_bioclip", "vectors_dino", "coordinates"
     '''
 
-    def __init__(self, file_path, dictionary, data_name="vectors", label_name="coordinates",valid_name="valid", do_valid=True):
+    def __init__(self, file_path, dataframe, data_name="vectors", label_name="coordinates",valid_name="valid", do_valid=True):
         self.file_path = file_path
         self.data_name = data_name
         self.label_name = label_name
         self.valid_name = valid_name
 
-        self.dictionary= dictionary
+        self.dataframe= dataframe
         self.file = None  # file will be opened per worker
 
         if do_valid:
             # Open once to read the valid mask
             with h5py.File(file_path, "r") as f:
                 valid_mask = f[self.valid_name][:]
-            # Filter the dictionary to only keep valid rows
-            self.dictionary = self.dictionary.loc[valid_mask[self.dictionary.index]]
+            # Filter the dataframe to only keep valid rows
+            self.dataframe = self.dataframe.loc[valid_mask[self.dataframe.index]]
 
     def __len__(self):
-        return len(self.dictionary)
+        return len(self.dataframe)
 
     def __getitem__(self, idx):
         # open file once per worker
         if self.file is None:
             self.file = h5py.File(self.file_path, "r")
         
-        hdf5_idx = self.dictionary.index[idx] #get the right index: idx arguments is in 0,..., len-1, hdf5_idx is a dictionary/hdf5 index.
+        hdf5_idx = self.dataframe.index[idx] #get the right index: idx arguments is in 0,..., len-1, hdf5_idx is a dataframe/hdf5 index.
 
 
         data = self.file[self.data_name][hdf5_idx]
@@ -306,13 +306,13 @@ class ordered_HDF5Dataset(Dataset):
         return (
             torch.tensor(data, dtype=torch.float32),
             torch.tensor(label, dtype=torch.float32),
-            torch.tensor(idx, dtype=torch.int64) #return the idx of dictionary, the one that has meaningful metadata associated to.
+            torch.tensor(idx, dtype=torch.int64) #return the idx of dataframe, the one that has meaningful metadata associated to.
         )
 
 
 
 
-class dictionary_data(Dataset):
+class dataframe_data(Dataset):
     def __init__(self, dataframe, idx_mapping=None, data_name=None):
         """
         Args:
@@ -330,7 +330,7 @@ class dictionary_data(Dataset):
         return self.length
 
     def __getitem__(self, idx):
-        # Map idx through dictionary if provided
+        # Map idx through dataframe if provided
         actual_idx = self.idx_mapping[idx] if self.has_idx else idx
         row = self.df.iloc[actual_idx]
 
@@ -348,7 +348,7 @@ class dictionary_data(Dataset):
 
         return data, label, dict_idx
 
-def get_species_emb(dictionary, output_dir, batch_size=4096):
+def get_species_emb(dataframe, output_dir, batch_size=4096):
     #Load bioclip model
     bioclip, preprocess_train, processor = open_clip.create_model_and_transforms('hf-hub:imageomics/bioclip-2')
     tokenizer = open_clip.get_tokenizer('hf-hub:imageomics/bioclip-2')
@@ -358,14 +358,14 @@ def get_species_emb(dictionary, output_dir, batch_size=4096):
     hdf5.create_HDF5_file(vector_length=768, name=output_dir)
     file = hdf5.open_HDF5(output_dir + ".h5")
 
-    indices = dictionary.index.tolist()
+    indices = dataframe.index.tolist()
 
     for start in tqdm(range(0, len(indices), batch_size), desc="Processing batches"):
         batch_indices = indices[start:start + batch_size]
-        batch_df = dictionary.loc[batch_indices]
+        batch_df = dataframe.loc[batch_indices]
 
         coordinates = batch_df[['decimalLatitude', 'decimalLongitude']].to_numpy()
-        vectors_to_add = utils.get_species_emb(np.array(batch_indices), dictionary, bioclip, tokenizer)
+        vectors_to_add = utils.get_species_emb(np.array(batch_indices), dataframe, bioclip, tokenizer)
 
         # If torch tensors, convert to numpy
         if hasattr(vectors_to_add, "cpu"):
@@ -384,7 +384,7 @@ def get_species_emb(dictionary, output_dir, batch_size=4096):
 
 def one_hot(indices, spe_classIdx_dict):
     '''
-    takes the indices from the original dictionary/hp5 file, returns one hot vectors using the sepcies/class index dictionary
+    takes the indices from the original dataframe/hp5 file, returns one hot vectors using the sepcies/class index dataframe
     '''
     n_species = len(spe_classIdx_dict)
     indices=utils.to_numpy(indices).flatten()
@@ -394,9 +394,9 @@ def one_hot(indices, spe_classIdx_dict):
     one_hot_vectors[np.arange(len(indices)), class_indices] = 1.0
     return one_hot_vectors
 
-def species_classIdx_dict(dictionary, class_name="scientificName"):
-    class_codes = pd.Categorical(dictionary[class_name]).codes
-    df_codes = pd.DataFrame({'class_idx': class_codes}, index=dictionary.index)
+def species_classIdx_dict(dataframe, class_name="scientificName"):
+    class_codes = pd.Categorical(dataframe[class_name]).codes
+    df_codes = pd.DataFrame({'class_idx': class_codes}, index=dataframe.index)
     return df_codes
 
 
@@ -415,53 +415,52 @@ def plot_image_from_index(data_dict, index, return_only=False):
 if __name__== "__main__":
     
     #INaturalist data (from the filtered csv's):
-    # print("making dictionary")
+    # print("making dataframe")
     # path_occurences="Data/filtered_inaturalist/occurrence_plants.txt"
     # path_multimedia="Data/filtered_inaturalist/multimedia_plants.txt"
     # taxa_cols= ['kingdom','phylum','class', 'order','family','genus','species']
     # extra_occ_columns=['scientificName','countryCode']+ taxa_cols
-    # dictionary=get_dictionary(None, path_occurences, path_multimedia,extra_occ_columns=extra_occ_columns,sep=",")#3167066 rows
+    # dataframe=dataframe(None, path_occurences, path_multimedia,extra_occ_columns=extra_occ_columns,sep=",")#3167066 rows
     # #create a new column with the full bioclip name (not with the vernacular name)
     # taxa_cols.remove("genus") #For some reason, species contains genus+species ... removing genus gives the correct full taxon
-    # dictionary['taxa_bioclip'] = (
-    #     dictionary[taxa_cols]
+    # dataframe['taxa_bioclip'] = (
+    #     dataframe[taxa_cols]
     #     .astype(str)
     #     .replace('nan', '')
     #     .apply(lambda row: ' '.join([v for v in row if v]), axis=1) #separated by only a space, like in bioclip
     # )
     # #save
-    # dictionary.to_csv("Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants")
+    # dataframe.to_csv("Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants")
 
 
     # print("downloading arthropods embeddings")
     # #make embeddings
-    # dictionary= pd.read_csv("Embeddings_and_dictionaries/dictionary_inaturalist_FR_arthropods")
-    # #dictionary= pd.read_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioclip_data_dictionary_all_taxons")
-    # dictionary=dictionary
-    # download_emb(dictionary, dim_emb=768, output_dir="embeddings_inaturalist_FR_arthropods",max_workers=64)
+    # dataframe= pd.read_csv("Embeddings_and_dictionaries/dictionary_inaturalist_FR_arthropods")
+    # #dataframe= pd.read_csv("embeddings_data_and_dictionaries/Embeddings/Bioclip_encoder/bioclip_data_dictionary_all_taxons")
+    # dataframe=dataframe
+    # download_emb(dataframe, dim_emb=768, output_dir="embeddings_inaturalist_FR_arthropods",max_workers=64)
     # print("download arthropods finished")
 
     print("downloading plants embeddings")
     #make embeddings
-    dictionary= pd.read_csv("Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants")
-    download_emb(dictionary, dim_emb=768, output_dir="embeddings_inaturalist_FR_plants",max_workers=16)
+    dataframe= pd.read_csv("Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants")
+    download_emb(dataframe, dim_emb=768, output_dir="embeddings_inaturalist_FR_plants",max_workers=16)
     print("download plants finished")
 
     # print("downloading plants embeddings")
     # #make embeddings
-    # dictionary= pd.read_csv("Embeddings_and_dictionaries/dictionary_inaturalist_FR_mushrooms")
-    # dictionary=dictionary
-    # download_emb(dictionary, dim_emb=768, output_dir="embeddings_inaturalist_FR_mushrooms",max_workers=64)
+    # dataframe= pd.read_csv("Embeddings_and_dictionaries/dictionary_inaturalist_FR_mushrooms")
+    # download_emb(dataframe, dim_emb=768, output_dir="embeddings_inaturalist_FR_mushrooms",max_workers=64)
     # print("download mushrooms finished")
 
     # #Arthropods
-    # dictionary= pd.read_csv("Embeddings_and_dictionaries/arthropods/dictionary_inaturalist_FR_arthropods")
-    # get_species_emb(dictionary, "Embeddings_and_dictionaries/arthropods/species_embeddings_inaturalist_FR_arthropods", batch_size=4096)
+    # dataframe= pd.read_csv("Embeddings_and_dictionaries/arthropods/dictionary_inaturalist_FR_arthropods")
+    # get_species_emb(dataframe, "Embeddings_and_dictionaries/arthropods/species_embeddings_inaturalist_FR_arthropods", batch_size=4096)
 
     # #Mushrooms
-    # dictionary= pd.read_csv("Embeddings_and_dictionaries/mushrooms/dictionary_inaturalist_FR_mushrooms")
-    # get_species_emb(dictionary, "Embeddings_and_dictionaries/mushrooms/species_embeddings_inaturalist_FR_mushrooms", batch_size=4096)
+    # dataframe= pd.read_csv("Embeddings_and_dictionaries/mushrooms/dictionary_inaturalist_FR_mushrooms")
+    # get_species_emb(dataframe, "Embeddings_and_dictionaries/mushrooms/species_embeddings_inaturalist_FR_mushrooms", batch_size=4096)
 
     # #Plants
-    # dictionary= pd.read_csv("Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants")
-    # get_species_emb(dictionary, "Embeddings_and_dictionaries/plants/species_embeddings_inaturalist_FR_plants", batch_size=4096)
+    # dataframe= pd.read_csv("Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants")
+    # get_species_emb(dataframe, "Embeddings_and_dictionaries/plants/species_embeddings_inaturalist_FR_plants", batch_size=4096)

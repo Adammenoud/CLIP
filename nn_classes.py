@@ -178,7 +178,7 @@ class MultilGaussianEncoding(nn.Module):
 def build_model(cfg):
     '''
     Takes a config path and constructs the model (without loading the weights).
-    Follows the logic of the main but do not have all the details making them trainable (run_name, dictionary etc...) 
+    Follows the logic of the main but do not have all the details making them trainable (run_name, dataframe etc...) 
     Use for downstream evaluation only
     drop_last is used in the case of a classifier predicting species only.
     '''

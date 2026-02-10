@@ -28,13 +28,11 @@ from geoclip import LocationEncoder, GeoCLIP
 np.random.seed(48)
 torch.manual_seed(48)
 #--------------------------------------------------------------------------------------
-#static hyperparameters:
+#static hyperparameters (those in the config.yaml, not the ones in the sweep_config.yaml):
 with open("config.yaml") as f:
     static_cfg = yaml.safe_load(f)
-#sweep hyperparameters:
-#wandb
+#wandb API:use export WANDB_API_KEY=
 os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY')
-
 
 run = wandb.init(
     project = static_cfg['wandb']['project'],
@@ -57,8 +55,8 @@ if cfg.model_name == "classifier": #dim_output for classifier
     if model_cfg["target"]== "embeddings":
         dim_output=768
     else:
-        dictionary=pd.read_csv(static_cfg['paths'][cfg.dataset]['dict'])
-        dim_output=len(dictionary[model_cfg['class_column']].unique())
+        dataframe=pd.read_csv(static_cfg['paths'][cfg.dataset]['dict'])
+        dim_output=len(dataframe[model_cfg['class_column']].unique())
     cfg.model_params['classifier']['dim_output'] = dim_output
 #dumps the config
 file_path = Path(f"Model_saves/{run_name}/config.yaml")
@@ -88,34 +86,33 @@ if hasattr(cfg, "group_name"):
     wandb.run.group = cfg.group_name
 
 
-
-
-dictionary=pd.read_csv(dict_path)
+dataframe=pd.read_csv(dict_path)
 
 
 print("spliting data")
 difference=None #compatibility
-dataloader, test_dataloader =utils.dataloader_emb(data_path,
-                                                  batch_size=cfg.training['batch_size'], 
-                                                  shuffle=cfg.shuffle,
-                                                  train_ratio=cfg.train_ratio, 
-                                                  sort_duplicates=cfg.sort_duplicates, 
-                                                  dictionary=dictionary,
-                                                  drop_last=cfg.drop_last,
-                                                  dataset_type=cfg.dataset_type,
-                                                  vectors_name=cfg.vectors_name,
-                                                  spe_data_path=static_cfg['paths'][dataset]["specie_data"],
-                                                  difference=static_cfg["difference"]
+dataloader, test_dataloader, dataset_type =utils.dataloader_factory(file_path,
+                                                  static_cfg, 
+                                                  dataframe=dataframe,
                                                   )
+cfg.dataset_type=dataset_type #saves the dataset type in the config for debugging/clarity
+
 if cfg.drop_high_freq:
     sigma=[2**0, 2**4]
 else:
     sigma=[2**0, 2**4, 2**8]
 
-
+# ----------------------------
+#Model construction and training:
+# ----------------------------
 if cfg.model_name=="contrastive":
     model_cfg = cfg.model_params['contrastive']
-    model=nn_classes.DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder']),dim_in=static_cfg["model_params"]["contrastive"]["embedding_size"])
+    location_encoder=LocationEncoder(sigma=sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder'])
+    location_encoder=nn.Sequential(location_encoder,nn.Linear(512,3)) #delete
+    model=nn_classes.DoubleNetwork_V2(location_encoder,
+                                      dim_in=static_cfg["model_params"]["contrastive"]["image_embedding_size"],
+                                      dim_output=static_cfg["model_params"]["contrastive"]["contrastive_embedding_size"],
+                                      )
     print("training")
     model=train_contrastive.train(
                 model,
@@ -131,7 +128,7 @@ if cfg.model_name=="contrastive":
                 test_frequency=cfg.training['test_frequency'],
                 nbr_tests=cfg.training['nbr_tests'],
                 modalities=model_cfg['modalities'], 
-                dictionary=dictionary,  #if one wants to use a different dictionary in the "species" case
+                dataframe=dataframe,  #if one wants to use a different dataframe in the "species" case
                 )
 elif cfg.model_name== "classifier":
     model_cfg = cfg.model_params['classifier']
@@ -140,7 +137,7 @@ elif cfg.model_name== "classifier":
     elif model_cfg['loss'] == "MSE":
         loss=F.mse_loss
     if model_cfg['n_species'] is None:
-        n_species=len(dictionary[model_cfg['class_column']].unique())
+        n_species=len(dataframe[model_cfg['class_column']].unique())
         print("n_species:" , n_species)
     else:
         pass #could filter species here, maybe later
@@ -169,7 +166,7 @@ elif cfg.model_name== "classifier":
         )
     elif model_cfg["target"]== "specie_names":
         model=train_classifier.Classifier_train(model=model,
-                    dictionary=dictionary,
+                    dataframe=dataframe,
                     save_name=f"Model_saves/{run_name}",
                     lr=cfg.training['lr'],
                     loss=loss,
@@ -202,10 +199,4 @@ elif cfg.model_name== "classifier":
 
 else:
     raise Exception(f"invalid model_name: found '{cfg.model_name}' instead of 'contrastive' or 'classifier' ")
-
-
-#tensorboard --logdir=runs
-#https://www.gbif.org/occurrence/
-#CUDA_VISIBLE_DEVICES=1 python main.py
-#CUDA_VISIBLE_DEVICES=1 python -m pdb main.py
 

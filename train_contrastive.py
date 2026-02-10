@@ -32,7 +32,7 @@ def train(doublenetwork,
           test_frequency=1,
           nbr_tests=10,
           modalities=["images","coords"], #either "images","coords","NCEAS" or "species". Has to be compatible with the model's forward
-          dictionary=None,  #if want to use a different dictionary in the "species" case
+          dataframe=None,  #if want to use a different dataframe in the "species" case
           covariate_names= ["bcc","calc","ccc","ddeg","nutri","pday","precyy","sfroyy","slope","sradyy","swb","tavecc","topo"],
           detach_k_top=None
           ):
@@ -43,7 +43,7 @@ def train(doublenetwork,
     "modalities" can be either "images","coords","NCEAS" or "species". The order is the order that will be used in the model's forward method.
     They are implemented using the "prepare_modality_tools" and "get_modalities" functions.
     
-    "dictionary" is required only when working with the "species" modality.
+    "dataframe" is required only when working with the "species" modality.
     "covariate_names" is used only for the NCEAS covariates.
     '''
     #### initialization
@@ -71,7 +71,7 @@ def train(doublenetwork,
             images = images.to(device)
             coords = coords.to(device)
                 
-            modality_list= get_modalities(modalities, images, coords, idx, covariate_names, dictionary, scaler, bioclip, tokenizer, device=device)
+            modality_list= get_modalities(modalities, images, coords, idx, covariate_names, dataframe, scaler, bioclip, tokenizer, device=device)
 
             #also change idx on test loop
             logits=doublenetwork(modality_list[0],modality_list[1])  #logits of cosine similarities
@@ -140,7 +140,7 @@ def train(doublenetwork,
                         break
                     test_images = test_images.to(device)
                     test_coords = test_coords.to(device)
-                    test_modality_list= get_modalities(modalities, test_images, test_coords, test_idx, covariate_names, dictionary, scaler, bioclip, tokenizer, device=device)
+                    test_modality_list= get_modalities(modalities, test_images, test_coords, test_idx, covariate_names, dataframe, scaler, bioclip, tokenizer, device=device)
 
                     test_logits = doublenetwork(test_modality_list[0], test_modality_list[1]) 
                     test_loss = nn_classes.CE_loss(test_logits, device=device)
@@ -175,7 +175,7 @@ def train(doublenetwork,
 
 
 
-def get_modalities(modality_names, images, coords, idx, covariate_names, dictionary, scaler, bioclip, tokenizer, device="cuda"):
+def get_modalities(modality_names, images, coords, idx, covariate_names, dataframe, scaler, bioclip, tokenizer, device="cuda"):
     '''
     Coords order: [latitude, longitude]
     '''
@@ -201,7 +201,7 @@ def get_modalities(modality_names, images, coords, idx, covariate_names, diction
         results["NCEAS"] = torch.tensor(NCEAS_covariates).to(device)
     if "species" in modality_names:
         idx=idx.squeeze()
-        results["species"]=utils.get_species_emb(idx,dictionary,bioclip,tokenizer)
+        results["species"]=utils.get_species_emb(idx,dataframe,bioclip,tokenizer)
 
     return [results[mod] for mod in modality_names]
 
