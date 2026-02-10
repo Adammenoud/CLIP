@@ -96,25 +96,30 @@ if __name__ == "__main__":
     '''
     Select the best checkpoint for each run in a sweep, and copy it as "best_model.pt" in the corresponding folder.
     '''
-    process_sweep( #contrastive images
-    "adammenoud/sweep/1a25twyl",        # "entity/project/sweep_id"
-    "Model_saves/sweep_contrastive_images",      # local folder corresponding to that sweep
-    monitor="Cross-entropy validation",
-    )
-    process_sweep( #classifier emb
-    "adammenoud/sweep/17gfx76m",        
-    "Model_saves/sweep_classifier_emb",      
-    monitor="MSE on validation set",
-    format_type = "lightning"
-    )
-    process_sweep( #contrastive specie
-    "adammenoud/sweep/aj8aunmz",       
-    "Model_saves/sweep_contrastive_species",      
-    monitor="Cross-entropy validation",
-    )
-    process_sweep( #classifier specie name
-    "adammenoud/sweep/1wv36j0v",       
-    "Model_saves/sweep_classifier",     
-    monitor="cross_entropy validation",
-    format_type = "lightning"
-    )
+    # process_sweep( #contrastive images
+    # "adammenoud/sweep/1a25twyl",        # "entity/project/sweep_id"
+    # "Model_saves/sweep_contrastive_images",      # local folder corresponding to that sweep
+    # monitor="Cross-entropy validation",
+    # )
+    # process_sweep( #classifier emb
+    # "adammenoud/sweep/17gfx76m",        
+    # "Model_saves/sweep_classifier_emb",      
+    # monitor="MSE on validation set",
+    # format_type = "lightning"
+    # )
+    # process_sweep( #contrastive specie
+    # "adammenoud/sweep/aj8aunmz",       
+    # "Model_saves/sweep_contrastive_species",      
+    # monitor="Cross-entropy validation",
+    # )
+    # process_sweep( #classifier specie name
+    # "adammenoud/sweep/1wv36j0v",       
+    # "Model_saves/sweep_classifier",     
+    # monitor="cross_entropy validation",
+    # format_type = "lightning"
+    # )
+    # process_sweep( #mixed images/species
+    # "adammenoud/sweep/03h7yf5l",        # "entity/project/sweep_id"
+    # "Model_saves/species_and_images",      # local folder corresponding to that sweep
+    # monitor="Cross-entropy validation",
+    # )

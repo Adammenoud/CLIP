@@ -190,11 +190,22 @@ def build_model(cfg):
             sigma=[2**0, 2**4, 2**8]
     #model branching
     if cfg["model_name"]=="contrastive":
-        try:
-            embedding_size = cfg["model_params"]["contrastive"]["embedding_size"]
+        try:#backward compatibility with old configs: image_embedding_size used to be called embedding_size
+            image_embedding_size = cfg["model_params"]["contrastive"]["image_embedding_size"]
         except KeyError:
-            embedding_size = 768
-        model=DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder']),dim_in=embedding_size)
+            try:
+                image_embedding_size = cfg["model_params"]["contrastive"]["embedding_size"]
+            except KeyError:
+                image_embedding_size = 768
+        try:#backward compatibility with old configs: contrastive_embedding_size was fixed at 512...
+            dim_output=cfg["model_params"]["contrastive"]["contrastive_embedding_size"]
+        except KeyError:
+            contrastive_embedding_size=512
+        
+        model=DoubleNetwork_V2(LocationEncoder(sigma=sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder']),
+                               dim_in=image_embedding_size,
+                               dim_output=contrastive_embedding_size
+                               )
     elif cfg["model_name"]=="classifier":
         dim_output = cfg["model_params"]['classifier']['dim_output']    
         model = nn.Sequential(

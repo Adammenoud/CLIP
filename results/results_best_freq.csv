@@ -1,0 +1,5 @@
+,dataset,vectors_name,model_name,use_species,run_name_clean,auc_emb_MLP_drop_False,auc_emb_MLP_drop_True,auc_emb_PR_drop_False,auc_emb_PR_drop_True,PR_better_with_drop,MLP_better_with_drop
+3,arthropods,vectors_bioclip,classifier,False,sweep_classifier_species_name,0.6772737570147742,0.5451635237922685,0.6182667099338909,0.5492975514037385,False,False
+6,arthropods,vectors_dino,classifier,False,sweep_classifier_species_name,0.6776048285589832,0.5457981266913094,0.6182667099338909,0.5492975514037385,False,False
+14,plants,vectors,contrastive,True,sweep_contrastive_species_emb,0.7027286369552326,0.7205493672949885,0.7742252453765036,0.7684604829799462,False,True
+15,plants,vectors_bioclip,contrastive,False,contrastive_images,0.6921077999899665,0.7254968007059757,0.7628426697591424,0.7608238198847919,False,True

@@ -157,40 +157,51 @@ elif cfg.model_name== "classifier":
 
     #(put model in wrapper)
     if model_cfg["target"]== "embeddings":
+        name_val_loss="MSE on validation set"
         model=train_classifier.Embeddings_Classifier_train(
             model, 
             f"Model_saves/{run_name}",
             loss=loss,
             name_training_loss="MSE on training set", 
-            name_val_loss="MSE on validation set", 
+            name_val_loss=name_val_loss, 
             lr=1e-4
         )
     elif model_cfg["target"]== "specie_names":
+        name_val_loss=f"{model_cfg['loss']} validation"
         model=train_classifier.Classifier_train(model=model,
                     dataframe=dataframe,
                     save_name=f"Model_saves/{run_name}",
                     lr=cfg.training['lr'],
                     loss=loss,
                     name_training_loss=f"{model_cfg['loss']} training", 
-                    name_val_loss=f"{model_cfg['loss']} validation",
+                    name_val_loss=name_val_loss,
                     class_name=model_cfg['class_column']
                     )
     else:
         raise ValueError(f"target '{model_cfg['target']}' invalid: select 'embeddings' or 'specie_names'")
     
     #checkpoints
+        #periodic checkpoints
     checkpoint_cb = ModelCheckpoint(
                             dirpath=f"Model_saves/{run_name}/checkpoints",
                             filename=f"{run_name}_checkpoint_{{epoch}}", 
                             save_top_k=-1,  # save all epochs; use 1 for only the best
                             )
+        #best_model.pt checkpoint
+    best_model_cb = ModelCheckpoint(
+                            dirpath=f"Model_saves/{run_name}",   
+                            filename="best_model",
+                            monitor=name_val_loss,                 
+                            mode="min",                          
+                            save_top_k=1,                      
+                        )
     #trainer
     trainer= L.Trainer(max_epochs=cfg.training['epochs'], 
                     accelerator=cfg.training['device'], 
                     devices=1, 
                     default_root_dir=f"Model_saves/{run_name}",   # overwritten by checkpoints?
                     log_every_n_steps=cfg.training['test_frequency'],
-                    callbacks=[checkpoint_cb],
+                    callbacks=[checkpoint_cb, best_model_cb],
                     limit_val_batches=cfg.training['nbr_tests'],
                     logger=wandb_logger,
                     deterministic=True

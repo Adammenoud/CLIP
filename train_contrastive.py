@@ -18,7 +18,6 @@ import wandb
 import NCEAS
 import utils
 import nn_classes
-import data_extraction
 
 def train(doublenetwork,
           epochs,
@@ -151,6 +150,12 @@ def train(doublenetwork,
                     n_batches += 1
 
                 avg_loss = total_loss / max(1, n_batches)# the test dataloader my be too small sometimes
+                # Save the model if it's the best so far
+                if avg_loss < best_loss:
+                    best_loss = avg_loss
+                    if save_name is not None:
+                        os.makedirs(save_name, exist_ok=True)
+                        torch.save(doublenetwork.state_dict(), os.path.join(save_name, f"best_model.pt"))
                 writer.add_scalar("CE on test set", avg_loss, global_step=ep)
 
                 avg_metrics = {}

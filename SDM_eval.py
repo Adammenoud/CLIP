@@ -449,6 +449,9 @@ def apply_callback_config(base_path, params_to_read, callback,**kwargs):
         return
     if not os.path.isfile(model_path):
         warnings.warn(f"model.pt not found at: {model_path}")
+        model_path = os.path.join(base_path, 'best_model.ckpt') #try lightning checkpoint
+        if not os.path.isfile(model_path):
+            warnings.warn(f"model checkpoint not found at: {model_path}")
         return
     
     #load config, model
@@ -487,11 +490,9 @@ def apply_callback_config(base_path, params_to_read, callback,**kwargs):
     }
     return output_data
 
-def SDM_eval_from_folder(base_path, params_to_read=["drop_high_freq", "dataset","vectors_name","model_name","use_species",], 
-                         output_file="SDM_output", 
+def SDM_eval_from_folder(base_path, params_to_read=["drop_high_freq", "dataset","vectors_name","model_name","use_species",],  
                          PR_to_train = ["emb"], 
                          MLP_to_train = ["emb"],
-                         model_class=None,
                          **kwargs):
     
     param_and_results=apply_callback_config(base_path,
@@ -568,5 +569,5 @@ if __name__ == "__main__":
     # run_SDM_on_superfolder("Model_saves/sweep_classifier_emb","results.csv")
     # run_SDM_on_superfolder("Model_saves/sweep_contrastive_images","results.csv")
     # run_SDM_on_superfolder("Model_saves/sweep_contrastive_species","results.csv")
-    run_SDM_on_superfolder("","results_geoplant_clean.csv",params_to_read=["drop_high_freq", "dataset","vectors_name","model_name","use_species","run_name_clean","difference"])
+    run_SDM_on_superfolder("Model_saves/species_and_images","results_mixed.csv",params_to_read=["drop_high_freq", "dataset","vectors_name","model_name","use_species","run_name_clean","difference"])
 
