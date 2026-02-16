@@ -561,5 +561,5 @@ if __name__ == "__main__":
     # run_SDM_on_superfolder("Model_saves/sweep_classifier_emb","results.csv")
     # run_SDM_on_superfolder("Model_saves/sweep_contrastive_images","results.csv")
     # run_SDM_on_superfolder("Model_saves/sweep_contrastive_species","results.csv")
-    run_SDM_on_superfolder("Model_saves/species_and_images","results_mixed.csv",params_to_read=["drop_high_freq", "dataset","vectors_name","model_name","use_species","run_name_clean","difference"])
+    run_SDM_on_superfolder("Model_saves/sweep_mixed_embeddings","results_mixed.csv",params_to_read=["drop_high_freq", "dataset","vectors_name","model_name","use_species","run_name_clean","mixed_data_method","mixed_embeddings"])
 

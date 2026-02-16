@@ -11,6 +11,7 @@ from PIL import Image
 import io
 import base64
 import torch.nn as nn
+import os
 
 import nn_classes
 import datasets
@@ -21,7 +22,7 @@ dict_path = "/home/adam/source/CLIP/Embeddings_and_dataframes/plants/dictionary_
 
 image_path="Data/swiss_images/all_images/17_2645281974.jpg"
 
-
+save_name="near_random_points"
 
 with open("config_3d.yaml") as f:
     cfg = yaml.safe_load(f)
@@ -126,7 +127,9 @@ fig.add_trace(go.Scatter3d(
     ),
     text=["Query Image"]  # hover text
 ))
-###### Images hover
+###### Images visualization
+images_save_path=f"{save_name}_images"
+os.makedirs(images_save_path,exist_ok=True)
 
 class dot_product(nn.Module):
     def __init__(self,pos_encoder):
@@ -147,18 +150,21 @@ class dot_product(nn.Module):
         return logits
 dot_prod=dot_product(pos_enc)
 
-points=points=np.random.normal(size=(5,3))
+points=points=np.random.normal(size=(100,3))
+#--- Take noise around Augustifollium instead of uniform
+points=emb_img+ 0.1*points
+#---
+
 points /= np.linalg.norm(points,axis=1, keepdims=True)
 hover_imgs=[]
-for p in tqdm(points, desc="Making images from points"):
+print("clicking maps:")
+for i,p in enumerate(points):
     vector=torch.tensor(p, device="cuda",dtype=torch.float32).unsqueeze(0)
-    img=utils.map_embedding(dot_prod, vector, country = "France", grid_resolution=0.03,return_pil=True)
-    buffer= io.BytesIO()
-    img.save(buffer, format="PNG")
-    b64=base64.b64encode(buffer.getvalue()).decode()
-    hover_imgs.append(
-        f'<img src="data:image/png;base64,{b64}" width="120"/>'
-    )
+    img=utils.map_embedding(dot_prod, vector, country = "France", grid_resolution=0.03,return_pil=True, vmin=-1,vmax=1)
+    path=f"{images_save_path}/p{i:04d}.png"
+    img.save(path)
+    hover_imgs.append(path)
+
 
 fig.add_trace(
     go.Scatter3d(
@@ -166,15 +172,40 @@ fig.add_trace(
         y=points[:,1],
         z=points[:,2],
         mode="markers",
-        marker=dict(size=4, color="green"),
-        hovertemplate="%{customdata}<extra></extra>",
+        marker=dict(size=4, color="purple"),
         customdata=hover_imgs,
         name="Embeddings"
     )
 )
 
+html=fig.to_html(full_html=True, include_plotlyjs="cdn")
 
+panel = """
+<div id="img-box" style="
+    position:fixed;
+    top:10px;
+    right:10px;
+    width:350px;
+    background:white;
+    border:1px solid #aaa;
+    padding:10px;
+    z-index:1000;">
+    <h4>Clicked point</h4>
+    <img id="img-view" style="width:100%;" />
+</div>
 
-save_name="5random_points.html"
-fig.write_html(save_name)
-print(f"Saved to {save_name}")
+<script>
+document.getElementsByClassName('plotly-graph-div')[0]
+  .on('plotly_click', function(data){
+      let img = data.points[0].customdata;
+      document.getElementById("img-view").src = img;
+  });
+</script>
+"""
+html=html.replace("</body>",panel+"</body>")
+
+with open(f"{save_name}_plot.html", "w") as f:
+    f.write(html)
+
+# fig.write_html(save_name)
+# print(f"Saved to {save_name}")
