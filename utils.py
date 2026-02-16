@@ -475,3 +475,11 @@ def video_similarity(checkpoint_folder,config_path,image,save_path=None,vmin=Non
         else:
             output_dir=os.path.join(save_path, f"{i}")
         map_image(model, image, country="France", device="cuda", grid_resolution=0.03, save_path=output_dir,vmin=vmin,vmax=vmax)
+
+
+def dump_config(cfg,run_name):
+    file_path=Path(f"Model_saves/{run_name}/config.yaml")
+    file_path.parent.mkdir(parents=True,exist_ok=True)
+    cfg_dict=dict(cfg)
+    with open(file_path,"w") as f:
+        yaml.dump(cfg_dict, f, default_flow_style=False)

@@ -1,13 +1,13 @@
 # ----------------------------
 # Dataset and embeddings
 # ----------------------------
-dataset: plants        # Default, overridden by sweep
-vectors_name: vectors_bioclip # Default, overridden by sweep
+dataset: mushrooms        # Default, overridden by sweep
+vectors_name: vectors_bioclip # Default, can be overridden by sweep
 use_species: False #with vectors_name: vectors
 
 
-mixed_embeddings: False #uses both the image and species embeddings for training. Operation between those are handled in the "mixed_HDF5Dataset" class
-mixed_data_method: difference
+mixed_embeddings: True #uses both the image and species embeddings for training. Operation between those are handled in the "mixed_HDF5Dataset" class
+mixed_data_method: difference #overridden
 
 shuffle: True
 train_ratio: 0.8
@@ -39,7 +39,7 @@ paths:
 # ----------------------------
 # Training hyperparameters
 # ----------------------------
-drop_high_freq: False         # Default, overridden by sweep 
+drop_high_freq: True         # Default, overridden by sweep 
 
 
 training:
@@ -48,10 +48,9 @@ training:
   lr: 0.0001                
   device: cuda
   saving_frequency: 1
-  nbr_checkpoints: 20
+  nbr_checkpoints: 10
   test_frequency: 1
   nbr_tests: 10
-  
 # ----------------------------
 # Model
 # ----------------------------
@@ -64,8 +63,7 @@ model_params:
     modalities: #yaml list, will be loaded as a python list
       - images
       - coords
-    image_embedding_size: 768 #2*768
-    contrastive_embedding_size: 3
+    contrastive_embedding_size: 512
   classifier:
     class_column: species
     loss: "MSE" #"cross_entropy", MSE
@@ -73,9 +71,9 @@ model_params:
     target: embeddings              #embeddings, specie_names
 
 # ----------------------------
-# Optional: save name pattern
+# Save
 # ----------------------------
-run_name: "3dimensional_embedding_space" #overridden by sweep
+run_name: "sweep_mixed_embeddings"
 
 wandb:
   project: contrastive_learning #overidden by sweep

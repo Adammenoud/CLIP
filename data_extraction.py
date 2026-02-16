@@ -21,6 +21,17 @@ import matplotlib.pyplot as plt
 #data available at https://api.gbif.org/v1/occurrence/download/request/0015029-251025141854904.zip
 
 def get_dataframe(nbr_images, path_occurences, path_multimedia, extra_occ_columns=None, sep="\t"):
+    '''
+    merges the occurences and multimedia csv from GBIF.
+    Keeps only the first nbr_images entries of the multimedia (if not None).
+
+    Keeps by default the columns "gbifID", "decimalLatitude", "decimalLongitude" from occurences, 
+    the columns "gbifID", "identifier" from multimedia, 
+    and can also keep extra columns from occurences if specified in extra_occ_columns (list of column names).
+
+    returns the merged pandas dataframe.
+    '''
+    
     # Load (takes about 3 min)
     occurrences = pd.read_csv(path_occurences, sep=sep, low_memory=False)
     multimedia = pd.read_csv(path_multimedia, sep=sep, low_memory=False)
@@ -43,8 +54,7 @@ def get_dataframe(nbr_images, path_occurences, path_multimedia, extra_occ_column
         how='left'
     )
     return merged
-#"individualCount", "coordinateUncertaintyInMeters", "coordinatePrecision", "taxonID", "scientificNameID" , "acceptedNameUsageID" , "parentNameUsageID", "originalNameUsageID", "scientificName"
-#class	order	superfamily	family	subfamily	tribe	subtribe	genus	genericName	subgenus
+
 
 def download_imgs(dataframe, output_dir="downloaded_images/all_images"):
     """
@@ -65,40 +75,8 @@ def download_imgs(dataframe, output_dir="downloaded_images/all_images"):
             else:
                 print(f"Failed to download {url}")
 
-'''
-def download_emb(dataframe, dim_emb,output_dir="downloaded_embeddings",device="cuda"):
-    #Mind the name under which images are registered:  {idx}_{row['gbifID']}.jpg
 
-    # Create folder for embeddings
-    hdf5.create_HDF5_file(vector_length=dim_emb,name=output_dir)
-    file = hdf5.open_HDF5(output_dir + ".h5")
 
-    #get DINOv2
-    processor = AutoImageProcessor.from_pretrained('facebook/dinov2-base')
-    model = AutoModel.from_pretrained('facebook/dinov2-base').to(device)
-
-    # Loop over rows
-    for idx, row in tqdm(dataframe.iterrows(), total=dataframe.shape[0], desc="Downloading embeddings"):
-        url = row['identifier']
-        if pd.notna(url):
-            response = requests.get(url, stream=True)
-            if response.status_code == 200:
-                # get image
-                image = Image.open(response.raw).convert("RGB")
-                #encode image
-                inputs = processor(images=image, return_tensors="pt")
-                inputs = {k: v.to(device) for k, v in inputs.items()}
-                outputs = model(**inputs)
-                last_hidden_states = outputs.last_hidden_state
-                cls_embedding = last_hidden_states[:, 0, :].cpu().detach().numpy()#get only the cls
-                # get label (coordinates)
-                coordinates = np.array([[row['decimalLatitude'], row['decimalLongitude']]])  # shape (1,2)
-                #appends
-                hdf5.append_HDF5(vectors_to_add=cls_embedding, label_to_add=coordinates,file=file, data_name="vectors",label_name="coordinates")
-            else:
-                print(f"Failed to download {url}")
-    file.close()
-'''
 def get(url):
     url = url.replace("original", "medium")
     response = requests.get(url, stream=True, timeout=10)
@@ -133,7 +111,7 @@ def process_row(row, processor_dino, processor_bioclip, model_dino,model_bioclip
         #DINO:
         inputs = processor_dino(images=image, return_tensors="pt") #for DINOv2
         inputs = {k: v.to(device) for k, v in inputs.items()} #for DINOv2
-        #bioclip_
+        #bioclip
         image_tensor = processor_bioclip(image).unsqueeze(0).to(device)
         with torch.no_grad(): #encode
             outputs_dino = model_dino(**inputs)  #for DINO-V2 (normal forward method)
@@ -181,7 +159,7 @@ def download_emb(dataframe, dim_emb, output_dir="downloaded_embeddings", device=
     model_bioclip.eval()
     tokenizer_bioclip = open_clip.get_tokenizer('hf-hub:imageomics/bioclip-2')
 
-    # Parallel processing
+    # Parallel processing (uses the process_row function)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {executor.submit(process_row, row, processor_dino, processor_bioclip, model_dino,model_bioclip, device, dataframe, tokenizer_bioclip,ERROR_FILE,error_lock): idx  #syntax: .submit(function, arg1, arg2, ...). Basically, an ashychronous "for" loop on idx, row that tracks the output of process_row, and index it on idx
                          for idx, row in dataframe.iterrows()}
@@ -201,152 +179,6 @@ def download_emb(dataframe, dim_emb, output_dir="downloaded_embeddings", device=
 
     file.close()
 
-class HDF5Dataset(Dataset):
-    def __init__(self, file_path, data_name="vectors", label_name="coordinates"):
-        self.file_path = file_path
-        self.data_name = data_name
-        self.label_name = label_name
-        self.file = None  # file will be opened per worker
-
-        # Open once just to get length
-        with h5py.File(file_path, "r") as f:
-            self.length = f[data_name].shape[0]
-            self.has_idx = "dict_idx" in f
-
-    def __len__(self):
-        return self.length
-
-    def __getitem__(self, idx):
-        # open file once per worker
-        if self.file is None:
-            self.file = h5py.File(self.file_path, "r")
-
-        data = self.file[self.data_name][idx]
-        label = self.file[self.label_name][idx]
-        dict_idx = self.file["dict_idx"][idx] if self.has_idx else -1
-
-        return (
-            torch.tensor(data, dtype=torch.float32),
-            torch.tensor(label, dtype=torch.float32),
-            torch.tensor(dict_idx, dtype=torch.int64)
-        )
-
-class mixed_HDF5Dataset(Dataset):
-    '''
-    combines species embeddings and images embeddings.
-    Either simply concatenate, or concatenate species and the normalized image-specie vector, if difference=True
-    Specie embeddings have to be ordered as well, otherwise there will be an error.
-    '''
-
-    def __init__(self, file_path_images,file_path_spe, dataframe, data_name_images="vectors_bioclip",data_name_spe="vectors", label_name="coordinates",valid_name="valid", do_valid=True,difference=False):
-        self.images_dataset=ordered_HDF5Dataset(file_path_images, dataframe, data_name=data_name_images, label_name=label_name,valid_name=valid_name, do_valid=do_valid)
-        self.spe_dataset=HDF5Dataset(file_path_spe, data_name=data_name_spe, label_name=label_name)
-        self.difference=difference
-        self.dataframe=dataframe
-
-    def __len__(self):
-        return len(self.images_dataset) #spe_data should have all entries
-    
-    def __getitem__(self, idx):
-        image_emb, image_coords ,image_idx = self.images_dataset[idx]
-        spe_emb, _, spe_idx= self.spe_dataset[image_idx]
-        if spe_idx != image_idx:
-            raise ValueError("The indices returned by the image dataset do not correspond to those from the species dataset.")
-        
-        if self.difference:
-            image_emb=image_emb-spe_emb
-            image_emb= torch.nn.functional.normalize(image_emb,dim=0) # the size is (768,) for now (gets single item)
-
-        return torch.cat((spe_emb,image_emb),dim=0), image_coords, spe_idx
-
-
-
-class ordered_HDF5Dataset(Dataset):
-    '''
-    This class assumes that the HDF5 indices correspond to indices of the dataframe.
-    (This requirement is fullfilled using the most recent download_emb function.)
-
-    It allows taking a subset by first filtering the dataframe.
-    Note that some downloads may have failed, thus some rows of the dataframe will also not be used in the dataset.
-    The rows that are filled with "None" should be identifiable from a mask hdf5 dataset, here "valid".
-
-    The names of the hdf5 datasets downloaded with download_embeddings are: "vectors_bioclip", "vectors_dino", "coordinates"
-    '''
-
-    def __init__(self, file_path, dataframe, data_name="vectors", label_name="coordinates",valid_name="valid", do_valid=True):
-        self.file_path = file_path
-        self.data_name = data_name
-        self.label_name = label_name
-        self.valid_name = valid_name
-
-        self.dataframe= dataframe
-        self.file = None  # file will be opened per worker
-
-        if do_valid:
-            # Open once to read the valid mask
-            with h5py.File(file_path, "r") as f:
-                valid_mask = f[self.valid_name][:]
-            # Filter the dataframe to only keep valid rows
-            self.dataframe = self.dataframe.loc[valid_mask[self.dataframe.index]]
-
-    def __len__(self):
-        return len(self.dataframe)
-
-    def __getitem__(self, idx):
-        # open file once per worker
-        if self.file is None:
-            self.file = h5py.File(self.file_path, "r")
-        
-        hdf5_idx = self.dataframe.index[idx] #get the right index: idx arguments is in 0,..., len-1, hdf5_idx is a dataframe/hdf5 index.
-
-
-        data = self.file[self.data_name][hdf5_idx]
-        label = self.file[self.label_name][hdf5_idx]
-
-        return (
-            torch.tensor(data, dtype=torch.float32),
-            torch.tensor(label, dtype=torch.float32),
-            torch.tensor(idx, dtype=torch.int64) #return the idx of dataframe, the one that has meaningful metadata associated to.
-        )
-
-
-
-
-class dataframe_data(Dataset):
-    def __init__(self, dataframe, idx_mapping=None, data_name=None):
-        """
-        Args:
-            dataframe (pd.DataFrame): DataFrame containing your data.
-            idx_mapping (dict, optional): Mapping from dataset idx to row idx in dataframe.
-            data_name (str, optional): Name of column to use as 'data'. If None, data will be None.
-        """
-        self.df = dataframe
-        self.data_name = data_name
-        self.idx_mapping = idx_mapping
-        self.has_idx = idx_mapping is not None
-        self.length = len(idx_mapping) if self.has_idx else len(dataframe)
-
-    def __len__(self):
-        return self.length
-
-    def __getitem__(self, idx):
-        # Map idx through dataframe if provided
-        actual_idx = self.idx_mapping[idx] if self.has_idx else idx
-        row = self.df.iloc[actual_idx]
-
-        # Prepare data
-        data = row[self.data_name] if self.data_name is not None else None
-        if data is not None:
-            data = torch.tensor(data, dtype=torch.float32)
-
-        # Prepare label tensor
-        label = torch.tensor([row['decimalLatitude'], row['decimalLongitude']], dtype=torch.float32)
-
-        # Correct dict_idx to mimic HDF5Dataset
-        dict_idx_value = idx if not self.has_idx else actual_idx
-        dict_idx = torch.tensor(dict_idx_value, dtype=torch.int64)
-
-        return data, label, dict_idx
 
 def get_species_emb(dataframe, output_dir, batch_size=4096):
     #Load bioclip model

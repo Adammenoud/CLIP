@@ -54,6 +54,8 @@ def train(doublenetwork,
     l = len(dataloader)
     current_checkpoint=1
     save_name="Model_saves/"+save_name #
+    best_loss=float('inf')
+
     if test_dataloader is not None:#warning if test_dataloader too small
         n_available_batches=len(test_dataloader)
         if n_available_batches < nbr_tests:

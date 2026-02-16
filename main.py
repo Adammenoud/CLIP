@@ -4,8 +4,6 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 import pandas as pd
-from torchinfo import summary
-import sys
 import wandb
 import os
 import yaml
@@ -13,17 +11,15 @@ import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from pathlib import Path
+from dotenv import load_dotenv
 #local:
 import utils
 import datasets
 import nn_classes
-import data_extraction
-import hdf5
 import train_contrastive
-import SDM_eval
 import train_classifier
 #geoclip
-from geoclip import LocationEncoder, GeoCLIP
+from geoclip import LocationEncoder
 
 #seed
 np.random.seed(48)
@@ -32,8 +28,11 @@ torch.manual_seed(48)
 #static hyperparameters (those in the config.yaml, not the ones in the sweep_config.yaml):
 with open("config.yaml") as f:
     static_cfg = yaml.safe_load(f)
-#wandb API:use export WANDB_API_KEY=
-os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY')
+#wandb API:
+load_dotenv()  # loads .env if present
+WANDB_API_KEY = os.getenv("WANDB_API_KEY") #otherwise: can also use use export WANDB_API_KEY=<your_api_key> in the terminal
+if WANDB_API_KEY is None:
+    raise RuntimeError("WANDB_API_KEY is not set (neither in .env nor in environment)")
 
 run = wandb.init(
     project = static_cfg['wandb']['project'],
@@ -60,12 +59,7 @@ if cfg.model_name == "classifier": #dim_output for classifier
         dim_output=len(dataframe[model_cfg['class_column']].unique())
     cfg.model_params['classifier']['dim_output'] = dim_output
 #dumps the config
-file_path = Path(f"Model_saves/{run_name}/config.yaml")
-file_path.parent.mkdir(parents=True, exist_ok=True)
-cfg_dict = dict(cfg)
-with open(file_path, "w") as f:
-    yaml.dump(cfg_dict, f, default_flow_style=False)
-
+utils.dump_config(cfg, run_name)
 
 
 
@@ -92,8 +86,8 @@ dataframe=pd.read_csv(dict_path)
 
 print("spliting data")
 difference=None #compatibility
-dataloader, test_dataloader, dataset_type =datasets.dataloader_factory(file_path,
-                                                  static_cfg, 
+dataloader, test_dataloader, dataset_type =datasets.dataloader_factory(data_path,
+                                                  dict(cfg), 
                                                   dataframe=dataframe,
                                                   )
 cfg.dataset_type=dataset_type #saves the dataset type in the config for debugging/clarity
@@ -103,17 +97,24 @@ if cfg.drop_high_freq:
 else:
     sigma=[2**0, 2**4, 2**8]
 
+#image embedding size infered from the data
+embedding, _, _ = dataloader.dataset[0]
+cfg.dataloader_embedding_size = embedding.shape[0]
+utils.dump_config(cfg, run_name)#to overwrite the inferred value
+
+
+
 # ----------------------------
 #Model construction and training:
 # ----------------------------
 if cfg.model_name=="contrastive":
-    model_cfg = cfg.model_params['contrastive']
+    #build model
     location_encoder=LocationEncoder(sigma=sigma,from_pretrained=cfg['model_params']['pretrained_geoclip_encoder'])
-    location_encoder=nn.Sequential(location_encoder,nn.Linear(512,3)) #delete
     model=nn_classes.DoubleNetwork_V2(location_encoder,
-                                      dim_in=static_cfg["model_params"]["contrastive"]["image_embedding_size"],
-                                      dim_output=static_cfg["model_params"]["contrastive"]["contrastive_embedding_size"],
-                                      )
+                                      dim_in=cfg.dataloader_embedding_size,
+                                      dim_output=cfg.model_params['contrastive']['contrastive_embedding_size'],
+                                    )
+    #train
     print("training")
     model=train_contrastive.train(
                 model,
@@ -128,9 +129,11 @@ if cfg.model_name=="contrastive":
                 test_dataloader=test_dataloader,
                 test_frequency=cfg.training['test_frequency'],
                 nbr_tests=cfg.training['nbr_tests'],
-                modalities=model_cfg['modalities'], 
-                dataframe=dataframe,  #if one wants to use a different dataframe in the "species" case
+                modalities=cfg.model_params['contrastive']['modalities'], 
+                dataframe=dataframe,
                 )
+    
+
 elif cfg.model_name== "classifier":
     model_cfg = cfg.model_params['classifier']
     if model_cfg['loss'] == "cross_entropy":

@@ -6,13 +6,15 @@ entity: adammenoud
 
 
 parameters:
+
   dataset: 
     values: [arthropods, mushrooms,plants]
+
   # vectors_name: 
   #   values: [vectors_bioclip, vectors_dino]
-  drop_high_freq:
-    values: [True, False]
 
-    
-  difference: 
-        values: [True, False]
+  # drop_high_freq:
+  #   values: [True, False]
+
+  mixed_data_method: 
+        values: ["sum", "concatenate", "difference", "concatenate_difference"]

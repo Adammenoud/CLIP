@@ -110,7 +110,14 @@ class Cov_Fourier_MLP(nn.Module):
         x=torch.cat((x, covariates), dim=1) #(batch_size, covariate_dim+fourier_dim)
         x= self.MLP(x)
         return x
-    
+
+
+class deepmaxent_loss(nn.Module):
+    def __init__(self):
+        super(deepmaxent_loss, self).__init__()
+    def forward(self, input, target):
+        loss = -((target)*(input.log_softmax(0))).mean(0).mean()
+        return loss
 
                               
 class GeneralCrossEntropyLoss(nn.Module):
