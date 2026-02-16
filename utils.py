@@ -20,6 +20,7 @@ import nn_classes
 import yaml
 from scipy.stats import gaussian_kde
 import re
+import io
 #local
 import train_contrastive
 import datasets
@@ -237,7 +238,7 @@ def apply_pos_enc(coords, pos_encoder,pca_model_path=None,comp_idx=None):
     return pos_encoder(coords).cpu()
 
 
-def map_image(doublenetwork, image, country="Switzerland", device="cuda", grid_resolution=0.1, save_path=None,vmin=None,vmax=None):
+def map_image(doublenetwork, image, country="Switzerland", device="cuda", grid_resolution=0.1, save_path=None,vmin=None,vmax=None,return_pil=False):
     '''
     Plots the similarity score of each coordinate with the image.
     image can be either a path or a PIL image.
@@ -252,7 +253,7 @@ def map_image(doublenetwork, image, country="Switzerland", device="cuda", grid_r
             "path_or_image must be a file path (str or Path) or a PIL.Image.Image"
         )
     emb_img = embedds_image(image)
-    map_embedding(doublenetwork, emb_img, country=country, device=device, grid_resolution=grid_resolution, save_path=save_path,vmin=vmin,vmax=vmax)
+    map_embedding(doublenetwork, emb_img, country=country, device=device, grid_resolution=grid_resolution, save_path=save_path,vmin=vmin,vmax=vmax, return_pil=return_pil)
     
 
 def embedds_image(image, device="cuda"):
@@ -264,7 +265,7 @@ def embedds_image(image, device="cuda"):
     emb_img = bioclip.encode_image(image)
     return emb_img
 
-def map_embedding(doublenetwork, embedding, country="Switzerland", device="cuda", grid_resolution=0.1, save_path=None,vmin=None,vmax=None):
+def map_embedding(doublenetwork, embedding, country="Switzerland", device="cuda", grid_resolution=0.1, save_path=None,vmin=None,vmax=None, return_pil=False):
     '''
     Plots the similarity score of each coordinate with the image embedding.
     If no save_path is given, uses plt.show()
@@ -281,9 +282,9 @@ def map_embedding(doublenetwork, embedding, country="Switzerland", device="cuda"
     if country=="France":
         polygon=filter_France(polygon)
     boundary = gpd.GeoSeries([polygon])
-    plot_values(coords,values,boundary,save_path,country,vmin=vmin,vmax=vmax)
+    return plot_values(coords,values,boundary,save_path,country,vmin=vmin,vmax=vmax,return_pil=return_pil)
 
-def plot_values(coords,values,boundary,save_path,country,title=None,vmin=None,vmax=None):
+def plot_values(coords,values,boundary,save_path,country,title=None,vmin=None,vmax=None, return_pil=False):
     '''
     Plots the values at the coordinates, with the country boundary.
 
@@ -301,6 +302,14 @@ def plot_values(coords,values,boundary,save_path,country,title=None,vmin=None,vm
     if title is None:
         title = f"Image similarity over {country}"
     ax.set_title(title)
+    if return_pil:
+        buf=io.BytesIO()
+        fig.savefig(buf, format="png",bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        img=Image.open(buf)
+        return img
+    
     if save_path is None:
         plt.show()
     else:
