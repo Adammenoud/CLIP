@@ -379,58 +379,14 @@ def train_and_eval(
 
     return results
 
-
-
-def sklearn_classification(X_cov=None, y=None, X_test_cov=None, y_true=None, data_callback=None):
-    '''
-    10-fold CV for the k parameter, then outputs the AUC for k-NN classification on test set.
-    Handles multi-output binary classification (e.g., 62 responses at once).
-    '''
-    if data_callback is not None:
-        X_cov, y, coords_po, X_test_cov, y_true, coords_pa = data_callback()  
-
-
-    pipeline = Pipeline([
-        ("scaler", StandardScaler()),
-        ("knn", MultiOutputClassifier(KNeighborsClassifier()))
-    ])
-    
-    param_grid = {"knn__estimator__n_neighbors": range(1, 20)}
-    
-    CV_object = GridSearchCV(
-        pipeline, 
-        param_grid, 
-        cv=10, 
-        scoring='roc_auc_ovr',  # will work for multi-output
-        n_jobs=-1
-    )
-    
-    CV_object.fit(X_cov, y)
-    best_k = CV_object.best_params_["knn__estimator__n_neighbors"]
-    
-    y_pred_proba = np.array([estimator.predict_proba(X_test_cov)[:, 1] 
-                                for estimator in CV_object.best_estimator_.named_steps['knn'].estimators_]).T
-    
-    aucs = []
-    for i in range(y_true.shape[1]):
-        auc = roc_auc_score(y_true[:, i], y_pred_proba[:, i])
-        aucs.append(auc)
-    mean_auc = np.mean(aucs)
-    print(f"Mean AUC across {y_true.shape[1]} responses: {mean_auc:.4f}, best k={best_k}")
-    return mean_auc, best_k
-
-
-
-
-
+# Why not only SDM_eval_from_folder ? -------------------------------------
 
 def apply_callback_config(base_path, params_to_read, callback,**kwargs):
     """¨
-    model is a DoubleNetwork_V2 by default.
-    base_path (str): Path to the folder containing config.yaml and model.pt: must both be in the same
-    params_to_read (list): List of parameter keys to extract from config.yaml, e.g., ['training.batch_size']
-    callback (function): Function that takes a PyTorch model and returns something
-    output_file (str): Path to save the result of callback
+    base_path (str): Path to the folder containing config.yaml and model.pt (both must be in the same folder)
+    params_to_read (list): List of parameter keys to extract from config.yaml, e.g., ["drop_high_freq", "dataset"]
+    callback (function): Function that takes a PyTorch model and returns something (most likely 'train_and_eval')
+    **kwargs : any other arguments needed by the callback.
     """
 
     config_path = os.path.join(base_path, 'config.yaml')
@@ -496,7 +452,7 @@ def SDM_eval_from_folder(base_path, params_to_read=["drop_high_freq", "dataset",
                                   )
     return param_and_results
 
-
+##-----------------------
 
 
 
@@ -557,9 +513,11 @@ def run_SDM_on_superfolder(
     return final_df
 
 if __name__ == "__main__":
-    # run_SDM_on_superfolder("Model_saves/sweep_classifier","results.csv")
-    # run_SDM_on_superfolder("Model_saves/sweep_classifier_emb","results.csv")
-    # run_SDM_on_superfolder("Model_saves/sweep_contrastive_images","results.csv")
-    # run_SDM_on_superfolder("Model_saves/sweep_contrastive_species","results.csv")
-    run_SDM_on_superfolder("Model_saves/sweep_mixed_embeddings","results_mixed.csv",params_to_read=["drop_high_freq", "dataset","vectors_name","model_name","use_species","run_name_clean","mixed_data_method","mixed_embeddings"])
+    run_SDM_on_superfolder("Model_saves/sweep_classifier","results.csv")
+    run_SDM_on_superfolder("Model_saves/sweep_classifier_emb","results.csv")
+    run_SDM_on_superfolder("Model_saves/sweep_contrastive_images","results.csv")
+    run_SDM_on_superfolder("Model_saves/sweep_contrastive_species","results.csv")
+    run_SDM_on_superfolder("Model_saves/sweep_mixed_embeddings","results_mixed.csv",
+                           params_to_read=["drop_high_freq", "dataset","vectors_name","model_name",
+                                           "use_species","run_name_clean","mixed_data_method","mixed_embeddings"])
 

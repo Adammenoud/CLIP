@@ -12,6 +12,8 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from pathlib import Path
 from dotenv import load_dotenv
+import argparse
+import importlib
 #local:
 import utils
 import datasets
@@ -26,7 +28,12 @@ np.random.seed(48)
 torch.manual_seed(48)
 #--------------------------------------------------------------------------------------
 #static hyperparameters (those in the config.yaml, not the ones in the sweep_config.yaml):
-with open("config.yaml") as f:
+parser=argparse.ArgumentParser()
+parser.add_argument("--config",
+                    default="configs/config.yaml",
+                    help="path to a configuration file. Examples can be found in 'configs' folder.")
+args=parser.parse_args()
+with open(args.config) as f:
     static_cfg = yaml.safe_load(f)
 #wandb API:
 load_dotenv()  # loads .env if present

@@ -68,21 +68,45 @@ class MLP(nn.Module):
 
 
 
-class DoubleNetwork(nn.Module):
-    def __init__(self, image_encoder, pos_encoder,device="cuda",temperature=0.07):
+class Contrastive(nn.Module):
+    """
+    Contrastive model with custom pos_encoder. 
+
+    image encoder is two linear layers by default.
+
+    pos_encoder should be explicitely passed as argument: its output should have size "dim_output" 
+    (which is the dimension of the contrastive embedding space).
+    """
+    def __init__(self,pos_encoder=LocationEncoder(from_pretrained=False), custom_image_encoder=None,dim_in=768,dim_hidden=768,dim_output=512,device="cuda",temperature=0.07):
         super().__init__()
-        self.image_encoder=image_encoder
         self.pos_encoder=pos_encoder
-        self.logit_scale = nn.Parameter(torch.log(torch.tensor(1/temperature))).to(device)
+        self.logit_scale = nn.Parameter(torch.log(torch.tensor(1/temperature))).to(device) # This used to freeze the gradient: moving the tensor breaks its "parameter wrapper"...
+        self.logit_scale = nn.Parameter(torch.tensor([1.0 / temperature], dtype=torch.float32, device=device).log())
+
         self.device=device
 
+        if custom_image_encoder is None: # coded in this way for compatibility reasons: image encoder used to be fixed.
+            self.lin1 = nn.Linear(dim_in, dim_hidden)
+            self.relu = nn.ReLU()
+            self.lin2 = nn.Linear(dim_hidden, dim_output)
+        else:
+            self.image_encoder=custom_image_encoder
+
     def forward(self, images, coordinates): #takes a batch of images and their labels
-        #returns the normalized pos/image similarity matrix
-        image_emb=self.image_encoder(images)
+        '''returns the normalized pos/image similarity matrix'''
+        #encode
+        if self.image_encoder is None:
+            x = self.lin1(images)
+            x = self.relu(x)
+            image_emb = self.lin2(x)
+        else:
+            x=self.image_encoder(x)
+        
         pos_emb=self.pos_encoder(coordinates)
+        #normalize
         image_emb = image_emb / image_emb.norm(dim=1, keepdim=True)
         pos_emb = pos_emb / pos_emb.norm(dim=1, keepdim=True)
-        # Compute cosine similarity (dot product here)
+        # Compute cosine similarity (dot product here, since vectors are normalized)
         logits = image_emb @ pos_emb.t()*self.logit_scale.exp()
         return logits
     
@@ -106,12 +130,14 @@ class DoubleNetwork_V2(nn.Module):
 
     def forward(self, image, coordinates, idx=None): #takes a batch of images and their labels
         '''returns the normalized pos/image similarity matrix'''
+        #encode
         x = self.lin1(image)
         x = self.relu(x)
         image_emb = self.lin2(x) #see geoCLIP paper
         
-        pos_emb=self.pos_encoder(coordinates)    #, idx)
+        pos_emb=self.pos_encoder(coordinates)
         
+        #normalize
         image_emb = image_emb / image_emb.norm(dim=1, keepdim=True)
         pos_emb = pos_emb / pos_emb.norm(dim=1, keepdim=True)
         # Compute cosine similarity (dot product here, since vectors are normalized)

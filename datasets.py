@@ -5,6 +5,7 @@ import torch
 import torchvision
 from torch.utils.data import DataLoader, Dataset,random_split, Subset
 from tqdm import tqdm
+import pandas as pd
 #local
 import datasets
 import h5py
@@ -277,6 +278,9 @@ def dataloader_factory(file_path,config, dataframe=None):
     # Gets some parameters from the config
     vectors_name= config["vectors_name"]
     spe_data_path=config['paths'][config["dataset"]]["specie_data"]
+    if dataframe is None:
+        dict_path = config['paths'][config["dataset"]]['dict']
+        dataframe=pd.read_csv(dict_path)
 
     #Picks the right dataset class from the config
     if config["use_species"] and config["mixed_embeddings"]:
@@ -285,8 +289,6 @@ def dataloader_factory(file_path,config, dataframe=None):
         dataset=datasets.HDF5Dataset(file_path,data_name=vectors_name)
         dataset_type="HDF5Dataset"
     elif config["mixed_embeddings"]:
-        if dataframe is None or spe_data_path is None:
-            raise Exception(f" 'None' arguments passed to 'mixed_HDF5Dataset' ")
         dataset=datasets.mixed_HDF5Dataset(file_path_images=file_path,file_path_spe=spe_data_path, dataframe=dataframe, data_name_images=vectors_name,mixing_method=config["mixed_data_method"])
         dataset_type="mixed_HDF5Dataset"
     else:

@@ -247,22 +247,23 @@ def plot_image_from_index(data_dict, index, return_only=False):
 if __name__== "__main__":
     
     #INaturalist data (from the filtered csv's):
-    # print("making dataframe")
-    # path_occurences="Data/filtered_inaturalist/occurrence_plants.txt"
-    # path_multimedia="Data/filtered_inaturalist/multimedia_plants.txt"
-    # taxa_cols= ['kingdom','phylum','class', 'order','family','genus','species']
-    # extra_occ_columns=['scientificName','countryCode']+ taxa_cols
-    # dataframe=dataframe(None, path_occurences, path_multimedia,extra_occ_columns=extra_occ_columns,sep=",")#3167066 rows
-    # #create a new column with the full bioclip name (not with the vernacular name)
-    # taxa_cols.remove("genus") #For some reason, species contains genus+species ... removing genus gives the correct full taxon
-    # dataframe['taxa_bioclip'] = (
-    #     dataframe[taxa_cols]
-    #     .astype(str)
-    #     .replace('nan', '')
-    #     .apply(lambda row: ' '.join([v for v in row if v]), axis=1) #separated by only a space, like in bioclip
-    # )
-    # #save
-    # dataframe.to_csv("Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants")
+    print("making dataframe")
+    path_occurences="Data/filtered_inaturalist/occurrence_plants.txt"
+    path_multimedia="Data/filtered_inaturalist/multimedia_plants.txt"
+    taxa_cols= ['kingdom','phylum','class', 'order','family','genus','species']
+    extra_occ_columns=['scientificName','countryCode']+ taxa_cols
+    dataframe=get_dataframe(None, path_occurences, path_multimedia,extra_occ_columns=extra_occ_columns,sep=",")
+    #create a new column with the full bioclip name (not with the vernacular name)
+    taxa_cols.remove("genus") #For some reason, species contains genus+species ... removing genus gives the correct full taxon
+    dataframe['taxa_bioclip'] = (
+        dataframe[taxa_cols]
+        .astype(str)
+        .replace('nan', '')
+        .apply(lambda row: ' '.join([v for v in row if v]), axis=1) #separated by only a space, like in bioclip
+    )
+    #save
+    #This dataframe is used together with the corresponding HDF5 file in the dataset classes, thus we group it in the same folder in "Embeddings_and_dataframes"
+    dataframe.to_csv("Embeddings_and_dictionaries/plants/dictionary_inaturalist_FR_plants")
 
 
     # print("downloading arthropods embeddings")
