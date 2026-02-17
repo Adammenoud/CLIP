@@ -7,6 +7,7 @@ from sklearn.decomposition import PCA
 import joblib
 from sklearn.preprocessing import StandardScaler
 import torch.nn.functional as F
+from pathlib import Path
 #local
 import datasets
 import utils
@@ -19,6 +20,7 @@ def perform_PCA(dataloader, img_enc, device="cuda", file_name="pca_model", n_com
     counter=0
     for embeddings, labels, _ in tqdm(dataloader, desc="Computing embeddings for PCA"):
         embeddings = embeddings.to(device)
+        embeddings=F.normalize(embeddings, p=2, dim=1)
         embeddings = img_enc(embeddings)  # get the actual encoded vectors
         all_embeddings.append(embeddings.detach().cpu().numpy())
         counter+= embeddings.shape[0]
@@ -26,19 +28,22 @@ def perform_PCA(dataloader, img_enc, device="cuda", file_name="pca_model", n_com
             break
 
     embeddings = np.vstack(all_embeddings)
-    scaler = StandardScaler()
-    scaler.fit(embeddings)
-    embeddings = scaler.transform(embeddings)
+
+    # scaler = StandardScaler()
+    # scaler.fit(embeddings)
+    #embeddings = scaler.transform(embeddings)
     pca = PCA(n_components=n_components)
     pca.fit(embeddings)
-    print("component vector:" ,pca.components_)
     joblib.dump(pca, f"PCA_models/{file_name}.pkl")
 
 
 
 def coord_to_PCA(coords, pos_enc,pca_model_path, comp_idx=1): 
-    '''takes coordinates and return the principal value associated to it. Considers the comp_idx-th component'''
+    '''takes coordinates and return the principal value associated to it. Considers the comp_idx-th component
+    coordinates must be in order lat, lon. Model forward take them in the order lon, lat.
+    '''
     pca_model=joblib.load(pca_model_path)
+    coords=torch.flip(coords, dims=[1])
     embeddings=pos_enc(coords).cpu()
     embeddings=F.normalize(embeddings, p=2, dim=1)
     vect_to_plot = pca_model.transform(embeddings.detach().numpy())
@@ -54,12 +59,18 @@ def do_and_plot_PCA(model, data_path,config,pca_file_name,nbr_components=None, n
     pca_model_path=f"PCA_models/{pca_file_name}.pkl"
     
     for i in range(nbr_plots):
-        utils.plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=pos_encoder,pca_model_path=pca_model_path, grid_resolution=grid_resolution, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path_pic)
+        if save_path_pic is not None:
+            save_path_pic=Path(save_path_pic)
+            save_path_pic_with_i=save_path_pic.with_name(f"{save_path_pic.stem}_{i}{save_path_pic.suffix}")
+        utils.plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=pos_encoder,pca_model_path=pca_model_path, grid_resolution=grid_resolution, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path_pic_with_i)
 
 
 
 def plot_PCA(pca_model_path,nbr_plots,pos_encoder,country_name="Switzerland",save_path=None):
     for i in range(nbr_plots):
+        if save_path is not None:
+            save_path_pic=Path(save_path_pic)
+            save_path_pic=save_path_pic.with_name(f"{save_path_pic.stem}_{i}{save_path_pic.suffix}")
         utils.plot_country_values(country_name=country_name, fct_to_plot=coord_to_PCA , pos_encoder=pos_encoder,pca_model_path=pca_model_path, grid_resolution=0.03, cmap='viridis',device="cuda",comp_idx=i,save_path=save_path)
 
 
@@ -81,14 +92,62 @@ if __name__ == "__main__":
 
 
 
+    # do_and_plot_PCA(model=model,
+    #                 data_path="Embeddings_and_dataframes/plants/embeddings_inaturalist_FR_plants.h5",
+    #                 config=config,
+    #                 pca_file_name="3d_visualization_PCA",
+    #                 nbr_components=1,
+    #                 nbr_plots=1,
+    #                 country_name="France",
+    #                 save_path_pic="FOLDER/pca_3d_visualization_1component",
+    #                 n_sample=None,
+    #                 grid_resolution=0.03,
+    #                 )
+    
+    model=nn_classes.DoubleNetwork_V2().to("cuda")
+    statedict=torch.load("Model_saves/sweep_contrastive_images/contrastive_images_plants_vectors_bioclip_drop_high_freq_False/best_model.pt", map_location='cuda')
+    model.load_state_dict(statedict)
+
     do_and_plot_PCA(model=model,
                     data_path="Embeddings_and_dataframes/plants/embeddings_inaturalist_FR_plants.h5",
                     config=config,
-                    pca_file_name="3d_visualization_PCA",
-                    nbr_components=1,
-                    nbr_plots=1,
+                    pca_file_name="contrastive_bioclip",
+                    nbr_components=10,
+                    nbr_plots=10,
                     country_name="France",
-                    save_path_pic="FOLDER/pca_3d_visualization_1component",
+                    save_path_pic="FOLDER/contrastive_bioclip",
+                    n_sample=None,
+                    grid_resolution=0.03,
+                    )
+    
+    model=nn_classes.DoubleNetwork_V2().to("cuda")
+    statedict=torch.load("Model_saves/sweep_contrastive_species/sweep_contrastive_species_emb_plants_drop_high_freq_False/best_model.pt", map_location='cuda')
+    model.load_state_dict(statedict)
+
+    do_and_plot_PCA(model=model,
+                    data_path="Embeddings_and_dataframes/plants/embeddings_inaturalist_FR_plants.h5",
+                    config=config,
+                    pca_file_name="contrastive_bioclip_species",
+                    nbr_components=10,
+                    nbr_plots=10,
+                    country_name="France",
+                    save_path_pic="FOLDER/contrastive_bioclip_species",
+                    n_sample=None,
+                    grid_resolution=0.03,
+                    )
+    
+    model=nn_classes.DoubleNetwork_V2().to("cuda")
+    statedict=torch.load("Model_saves/sweep_contrastive_images/contrastive_images_plants_vectors_dino_drop_high_freq_False/best_model.pt", map_location='cuda')
+    model.load_state_dict(statedict)
+
+    do_and_plot_PCA(model=model,
+                    data_path="Embeddings_and_dataframes/plants/embeddings_inaturalist_FR_plants.h5",
+                    config=config,
+                    pca_file_name="contrastive_dino",
+                    nbr_components=10,
+                    nbr_plots=10,
+                    country_name="France",
+                    save_path_pic="FOLDER/contrastive_dino",
                     n_sample=None,
                     grid_resolution=0.03,
                     )

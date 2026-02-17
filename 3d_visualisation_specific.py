@@ -22,7 +22,7 @@ dict_path = "/home/adam/source/CLIP/Embeddings_and_dataframes/plants/dictionary_
 
 image_path="Data/swiss_images/all_images/17_2645281974.jpg"
 
-save_name="near_random_points"
+save_name="principal_component_highlight"
 
 with open("config_3d.yaml") as f:
     cfg = yaml.safe_load(f)
@@ -156,6 +156,12 @@ points=emb_img+ 0.1*points
 #---
 
 points /= np.linalg.norm(points,axis=1, keepdims=True)
+
+
+points=np.array([[ 0.41790584 ,0.699829,   -0.5793049 ]]) #delete
+
+
+
 hover_imgs=[]
 print("clicking maps:")
 for i,p in enumerate(points):
@@ -177,6 +183,7 @@ fig.add_trace(
         name="Embeddings"
     )
 )
+
 
 html=fig.to_html(full_html=True, include_plotlyjs="cdn")
 
