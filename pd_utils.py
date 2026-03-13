@@ -2,12 +2,15 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def get_fct(colx,colf,df):
-    return df.groupby(colx)[colf].mean()
-def quick_plot(df,colx, colf="auc_emb_PR",kind="bar",center=True,title=None):
+def get_fct(colx,colf,df,mean=False):
+    if mean:
+        return df.groupby(colx)[colf].mean()
+    else:
+        return df.groupby(colx)[colf]
+'''def quick_plot(df,colx, colf="auc_emb_PR",kind="bar",center=True,title=None, mean=False):
     if title is None:
         title=f'Mean {colf} per {colx}'
-    mean_values=get_fct(colx,colf,df)
+    mean_values=get_fct(colx,colf,df,mean)
     mean_values.plot(kind=kind)  
     plt.ylabel(f'Mean {colf}')
     plt.xlabel(f'{colx}')
@@ -17,8 +20,58 @@ def quick_plot(df,colx, colf="auc_emb_PR",kind="bar",center=True,title=None):
         ymin = mean_values.min() - 0.01
         ymax = mean_values.max() + 0.01
         plt.ylim(ymin, ymax)
-    plt.show()
+    plt.show()'''
 
+def quick_plot(
+    df,
+    colx,
+    colf="auc_emb_PR",
+    kind="bar",
+    center=True,
+    title=None,
+    mean=False,
+    xlabel=None,
+    ylabel=None,
+    rename_index=None
+):
+    '''
+    xlabel : str or None, default=None
+        Custom label for the x-axis. If None, `colx` is used.
+
+    ylabel : str or None, default=None
+        Custom label for the y-axis. If None, a default label based on `colf`
+        is used.
+
+    rename_index : dict or None, default=None
+        Optional dictionary mapping original group labels to new labels.
+        Useful for renaming categories displayed on the x-axis.
+         e.g. : {"bs": "Batch size",
+                "lr": "Learning rate" }
+    '''
+
+
+    if title is None:
+        title = f"{colf} per {colx}"
+
+    values = get_fct(colx, colf, df, mean)
+
+    # Rename x categories if mapping provided
+    if rename_index is not None:
+        values = values.rename(index=rename_index)
+
+    values.plot(kind=kind)
+
+    # Custom axis labels
+    plt.xlabel(xlabel if xlabel else colx)
+    plt.ylabel(ylabel if ylabel else f"{colf}")
+    plt.title(title)
+
+    if kind == "bar" and center:
+        ymin = values.min() - 0.01
+        ymax = values.max() + 0.01
+        plt.ylim(ymin, ymax)
+
+    plt.show()
 
 #highest:
 def get_highest(df):
