@@ -84,7 +84,7 @@ def quick_plot(
         ymax = values.max() + 0.01
         plt.ylim(ymin, ymax)
     if rotate_names:
-        plt.xticks(rotation=45)
+        plt.xticks(rotation=45,ha="right")
 
     plt.show()
 
